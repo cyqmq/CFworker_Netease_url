@@ -51,12 +51,16 @@ MUSIC_U=xxxx; os=pc; appver=8.9.70;
 
 获取方式：登录 music.163.com → F12 → Network → 任意请求 → 复制 `Cookie` 请求头。
 
-**方式一（Workers Builds）怎么填**：Cloudflare 控制台 → `Workers & Pages` → `cfworker-netease-url` → `Settings` → `Variables` → `Add variable`：
-- Variable name：`COOKIE`
-- Value：上面的 Cookie 字符串
-- 勾选 **Secret**（加密保存）→ `Save` → 改任意文件再 `git push` 一次触发重新部署。
+**方式一（最稳，推荐用 KV Cookie 池，不受 git 部署影响）**：把 Cookie 写进 KV 键 `cookie_list`（JSON 数组），KV 与部署解耦，每次 `git push` 不会把它清掉。
+- 控制台：`Workers & Pages` → `KV` → `NETEASE_KV` → `Add key`
+  - key：`cookie_list`
+  - value：`["MUSIC_U=xxxx; os=pc;"]`（数组里可放多个轮询）
+- 或本地：`wrangler kv key put --binding NETEASE_KV cookie_list '["MUSIC_U=xxxx; os=pc;"]'`
 
-**方式二（本地 wrangler）怎么填**：
+**方式二（Workers Builds 环境变量）**：`Settings` → `Variables and Secrets` → `Add` → 名称 `COOKIE`、值填 Cookie 字符串、类型选 **Secret**。
+> ⚠️ 坑：通过 GitHub 自动部署（Workers Builds）时，每次 `git push` 可能会把控制台里设的 `COOKIE` 变量重置为空。若发现 `/health` 显示 `cookie_status: invalid`，优先改用上面的 **KV 方式**。
+
+**方式三（本地 wrangler）**：
 
 ```bash
 wrangler secret put COOKIE

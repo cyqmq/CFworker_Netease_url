@@ -602,10 +602,7 @@ export default {
     if (path === '/health') {
       return ok({
         service: 'running', cookie_status: cookie ? 'valid' : 'invalid',
-        cookie_count: Object.keys(buildCookie(cookie)).length,
-        _dbg_len: (cookie || '').length, _dbg_has_musicu: (cookie || '').indexOf('MUSIC_U') > -1,
-        _dbg_keys: Object.keys(buildCookie(cookie)),
-        version: '1.0.0-cf',
+        cookie_count: Object.keys(buildCookie(cookie)).length, version: '1.0.0-cf',
       });
     }
     if (path === '/api/info') {
