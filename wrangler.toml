@@ -1,0 +1,19 @@
+name = "netease-worker"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+
+# 设置 Cookie（黑胶会员账号）：wrangler secret put COOKIE
+# COOKIE 格式例如：MUSIC_U=xxxx; os=pc; appver=8.9.70;
+[vars]
+# 留空即可，部署后用 secret 设置
+COOKIE = ""
+
+# KV 存储：Cookie 池 + 直链缓存
+# 创建命名空间：wrangler kv namespace create NETEASE_KV
+# 将其 id 填入下面的 id 字段
+[[kv_namespaces]]
+binding = "NETEASE_KV"
+id = "00000000000000000000000000000000"
+
+[assets]
+directory = "public"

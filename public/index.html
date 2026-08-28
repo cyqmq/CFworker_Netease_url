@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>网易云音乐无损解析 · Cloudflare Worker</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --accent:#c20c0c; --text:#e8eaed; --muted:#9aa0a6; --border:#2a2e37; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:24px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:20px; margin:0; }
+  header .sub { color:var(--muted); font-size:13px; }
+  main { max-width:880px; margin:0 auto; padding:24px; }
+  .tabs { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
+  .tab { padding:8px 16px; border:1px solid var(--border); border-radius:20px; cursor:pointer; background:var(--card); color:var(--muted); font-size:14px; }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .panel { display:none; }
+  .panel.active { display:block; }
+  .row { display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
+  input, select { flex:1; min-width:160px; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:#0c0e12; color:var(--text); font-size:14px; }
+  button { padding:10px 20px; border:none; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; font-size:14px; font-weight:600; }
+  button.sec { background:var(--card); border:1px solid var(--border); color:var(--text); }
+  pre { background:#0c0e12; border:1px solid var(--border); border-radius:8px; padding:14px; overflow:auto; max-height:480px; font-size:13px; line-height:1.5; }
+  .hint { color:var(--muted); font-size:12px; margin:6px 0 14px; }
+  a { color:#7ab8ff; }
+  .result-title { font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  .download-link { display:inline-block; margin:6px 6px 0 0; padding:8px 14px; background:var(--card); border:1px solid var(--border); border-radius:8px; color:#7ab8ff; text-decoration:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎵 网易云音乐无损解析</h1>
+  <span class="sub">Cloudflare Worker 版 · 移植自 Suxiaoqinx/Netease_url</span>
+</header>
+<main>
+  <div class="tabs">
+    <div class="tab active" data-t="song">单曲解析</div>
+    <div class="tab" data-t="search">歌曲搜索</div>
+    <div class="tab" data-t="playlist">歌单解析</div>
+    <div class="tab" data-t="album">专辑解析</div>
+    <div class="tab" data-t="download">音乐下载</div>
+  </div>
+
+  <section class="panel active" id="p-song">
+    <div class="row"><input id="song-id" placeholder="歌曲ID 或链接：https://music.163.com/song?id=123456" /></div>
+    <div class="row">
+      <select id="song-level">
+        <option value="standard">标准 standard</option>
+        <option value="exhigh">极高 exhigh</option>
+        <option value="lossless" selected>无损 lossless</option>
+        <option value="hires">Hi-Res hires</option>
+        <option value="sky">沉浸环绕 sky</option>
+        <option value="jyeffect">高清环绕 jyeffect</option>
+        <option value="jymaster">超清母带 jymaster</option>
+        <option value="dolby">杜比 dolby</option>
+      </select>
+      <select id="song-type">
+        <option value="json" selected>完整信息 json</option>
+        <option value="url">仅链接 url</option>
+        <option value="name">详情 name</option>
+        <option value="lyric">歌词 lyric</option>
+      </select>
+      <button onclick="doSong()">解析</button>
+    </div>
+    <div class="hint">VIP 音质需要部署时配置黑胶会员 Cookie（wrangler secret put COOKIE）。</div>
+    <pre id="song-out">// 结果将显示在这里</pre>
+  </section>
+
+  <section class="panel" id="p-search">
+    <div class="row"><input id="search-kw" placeholder="关键词，如：周杰伦 稻香" /></div>
+    <div class="row"><input id="search-limit" placeholder="数量(默认30)" value="30" style="max-width:160px" /><button onclick="doSearch()">搜索</button></div>
+    <pre id="search-out">// 结果将显示在这里</pre>
+  </section>
+
+  <section class="panel" id="p-playlist">
+    <div class="row"><input id="pl-id" placeholder="歌单ID 或链接" /></div>
+    <div class="row"><button onclick="doPlaylist()">解析</button></div>
+    <pre id="pl-out">// 结果将显示在这里</pre>
+  </section>
+
+  <section class="panel" id="p-album">
+    <div class="row"><input id="al-id" placeholder="专辑ID 或链接" /></div>
+    <div class="row"><button onclick="doAlbum()">解析</button></div>
+    <pre id="al-out">// 结果将显示在这里</pre>
+  </section>
+
+  <section class="panel" id="p-download">
+    <div class="row"><input id="dl-id" placeholder="歌曲ID 或链接" /></div>
+    <div class="row">
+      <select id="dl-quality">
+        <option value="standard">标准 standard</option>
+        <option value="exhigh">极高 exhigh</option>
+        <option value="lossless" selected>无损 lossless</option>
+        <option value="hires">Hi-Res hires</option>
+        <option value="jymaster">超清母带 jymaster</option>
+      </select>
+      <button onclick="doDownload()">获取下载链接</button>
+      <button class="sec" onclick="doDownload(true)">直接下载文件</button>
+    </div>
+    <pre id="dl-out">// 结果将显示在这里</pre>
+  </section>
+</main>
+
+<script>
+  const api = (path, body) => fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r=>r.json());
+  const show = (id, v) => { document.getElementById(id).textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2); };
+
+  document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('p-'+t.dataset.t).classList.add('active');
+  });
+
+  async function doSong() {
+    const id = document.getElementById('song-id').value.trim();
+    const level = document.getElementById('song-level').value;
+    const type = document.getElementById('song-type').value;
+    if (!id) return;
+    const r = await api('/song', { id, level, type });
+    show('song-out', r);
+  }
+  async function doSearch() {
+    const keyword = document.getElementById('search-kw').value.trim();
+    const limit = document.getElementById('search-limit').value || 30;
+    if (!keyword) return;
+    const r = await api('/search', { keyword, limit });
+    if (r.data) {
+      const html = r.data.map(s => `#${s.id} 《${s.name}》 - ${s.artists}  [${s.album}]\n`).join('');
+      show('search-out', '共 ' + r.data.length + ' 条\n\n' + html + '\n' + JSON.stringify(r, null, 2));
+    } else show('search-out', r);
+  }
+  async function doPlaylist() {
+    const id = document.getElementById('pl-id').value.trim();
+    if (!id) return;
+    const r = await api('/playlist', { id });
+    show('pl-out', r);
+  }
+  async function doAlbum() {
+    const id = document.getElementById('al-id').value.trim();
+    if (!id) return;
+    const r = await api('/album', { id });
+    show('al-out', r);
+  }
+  async function doDownload(file) {
+    const id = document.getElementById('dl-id').value.trim();
+    const quality = document.getElementById('dl-quality').value;
+    if (!id) return;
+    if (file) {
+      window.open('/download?format=file&id=' + encodeURIComponent(id) + '&quality=' + quality, '_blank');
+      show('dl-out', '已在新标签页开始下载…');
+    } else {
+      const r = await api('/download', { id, quality, format:'json' });
+      show('dl-out', r);
+      if (r.data && r.data.download_url) {
+        const pre = document.getElementById('dl-out');
+        const a = document.createElement('a'); a.className='download-link'; a.href=r.data.download_url; a.textContent='直链下载'; a.target='_blank';
+        pre.parentNode.insertBefore(a, pre);
+      }
+    }
+  }
+  // 健康检查
+  fetch('/health').then(r=>r.json()).then(d=>console.log('health', d)).catch(()=>{});
+</script>
+</body>
+</html>
