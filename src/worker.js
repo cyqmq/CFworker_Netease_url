@@ -604,6 +604,7 @@ export default {
         service: 'running', cookie_status: cookie ? 'valid' : 'invalid',
         cookie_count: Object.keys(buildCookie(cookie)).length,
         _dbg_len: (cookie || '').length, _dbg_has_musicu: (cookie || '').indexOf('MUSIC_U') > -1,
+        _dbg_keys: Object.keys(buildCookie(cookie)),
         version: '1.0.0-cf',
       });
     }
