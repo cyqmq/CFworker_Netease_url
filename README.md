@@ -3,6 +3,10 @@
 将 [Suxiaoqinx/Netease_url](https://github.com/Suxiaoqinx/Netease_url) 移植到 Cloudflare Workers。
 使用 Netease 的 eapi 协议（AES-128-ECB + MD5 自实现，无需任何 npm 依赖）。
 
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?repository-url=https://github.com/cyqmq/CFworker_Netease_url)
+
+> 一键部署后还需：① 在 Workers 设置里 `wrangler secret put COOKIE`（VIP 音质）；② 用到 KV 时先 `wrangler kv namespace create NETEASE_KV` 并把 id 填进 `wrangler.toml`，再 `wrangler kv key put` 写入 `cookie_list`。
+
 ## 功能
 
 - 歌曲搜索、单曲解析、歌词、歌单解析、专辑解析
