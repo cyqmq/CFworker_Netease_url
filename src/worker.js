@@ -12,7 +12,9 @@ const UA =
 const REFERER = 'https://music.163.com/';
 
 const API = {
-  SONG_URL_V1: 'https://interface3.music.163.com/eapi/song/enhance/player/url/v1',
+  // 播放直链：interface3 常被数据中心 IP 封锁，优先用 music.163.com 主机（CF 可达），interface3 作兜底
+  SONG_URL_V1: 'https://music.163.com/eapi/song/enhance/player/url/v1',
+  SONG_URL_V1_ALT: 'https://interface3.music.163.com/eapi/song/enhance/player/url/v1',
   SONG_DETAIL_V3: 'https://interface3.music.163.com/api/v3/song/detail',
   LYRIC: 'https://interface3.music.163.com/api/song/lyric',
   SEARCH: 'https://music.163.com/api/cloudsearch/pc',
@@ -307,8 +309,14 @@ async function getSongUrl(songId, level, cookieStr, kv) {
     header: pyJson(config),
   };
   if (level === 'sky') payload.immerseType = 'c51';
-  const r = await eapiRequest(API.SONG_URL_V1, payload, cookieStr);
-  if (kv && r?.data?.[0]?.url) {
+  let r = null;
+  for (const host of [API.SONG_URL_V1, API.SONG_URL_V1_ALT]) {
+    r = await eapiRequest(host, payload, cookieStr);
+    const d = r?.data?.[0] || r?.data;
+    if (d?.url || d?.data?.url) break;
+    if (r?.code === -110) await new Promise((s) => setTimeout(s, 800));
+  }
+  if (kv && (r?.data?.[0]?.url || r?.data?.url)) {
     kv.put(cacheKey, JSON.stringify(r), { expirationTtl: 1100 }).catch(() => {});
   }
   return r;
