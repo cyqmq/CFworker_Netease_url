@@ -16,51 +16,89 @@
 
 ## 部署
 
+本项目支持两种部署方式，任选其一。
+
+### 方式一：一键 Deploy（Cloudflare Workers Builds，推荐）
+
+点击 README 顶部的 **Deploy to Cloudflare Workers** 按钮，或访问：
+
+```
+https://deploy.workers.cloudflare.com/?repository-url=https://github.com/cyqmq/CFworker_Netease_url
+```
+
+按提示用 GitHub 和 Cloudflare 账号授权，会自动连接仓库并构建部署。
+此后**每次 `git push` 都会自动重新部署**（Cloudflare Workers Builds 监听仓库）。
+
+部署后基础功能立即可用（标准 / 极高音质）。要解锁会员无损音质与 KV，见下方「变量与 KV 配置」。
+
+### 方式二：本地 wrangler deploy
+
 ```bash
 npm i -g wrangler        # 或 pnpm add -g wrangler
 cd netease-worker
-
-# 1) 创建 KV 命名空间，并把 id 填进 wrangler.toml 的 [[kv_namespaces]].id
-wrangler kv namespace create NETEASE_KV
-
-# 2)（可选）单个 Cookie：用 secret 设置，作为无 KV 列表时的回退
-wrangler secret put COOKIE
-# 内容例如： MUSIC_U=xxxx; os=pc; appver=8.9.70;
-
-wrangler deploy
+wrangler deploy          # 如需 KV，先把 wrangler.toml 里 [[kv_namespaces]] 注释取消并填真实 id
 ```
 
-> 不配置 COOKIE / KV 也能解析标准/极高音质（视账号限制），但无损/Hi-Res/SVIP 音质需要黑胶会员 Cookie。
-> Cookie 获取：登录 music.163.com → F12 → Network → 复制请求的 Cookie。
+## 变量与 KV 配置
 
-### 使用 KV（推荐）
+### COOKIE（必填才能用会员无损音质）
 
-KV 用于两件事：
+内容：黑胶会员账号的 Cookie，格式例如：
 
-1. **Cookie 池（轮换，缓解限流）**：把多个会员 Cookie 存到 KV 键 `cookie_list`（JSON 数组），
-   每次请求按轮询取一个，分散请求避免 `-110` 限流。
-2. **直链缓存**：歌曲解析直链按 `url:{id}:{level}` 缓存，TTL 1100s（网易直链本身约 20 分钟过期）。
+```
+MUSIC_U=xxxx; os=pc; appver=8.9.70;
+```
 
-写入 Cookie 池：
+获取方式：登录 music.163.com → F12 → Network → 任意请求 → 复制 `Cookie` 请求头。
+
+**方式一（Workers Builds）怎么填**：Cloudflare 控制台 → `Workers & Pages` → `cfworker-netease-url` → `Settings` → `Variables` → `Add variable`：
+- Variable name：`COOKIE`
+- Value：上面的 Cookie 字符串
+- 勾选 **Secret**（加密保存）→ `Save` → 改任意文件再 `git push` 一次触发重新部署。
+
+**方式二（本地 wrangler）怎么填**：
+
+```bash
+wrangler secret put COOKIE
+# 按提示粘贴 Cookie 字符串
+```
+
+> 不配置 COOKIE 也能解析标准 / 极高音质（视账号限制），但无损 / Hi-Res / SVIP 需要黑胶会员 Cookie。
+
+### KV（可选，推荐：Cookie 池 + 直链缓存）
+
+KV 做两件事：
+1. **Cookie 池（轮换，缓解限流）**：多个会员 Cookie 存到 KV 键 `cookie_list`（JSON 数组），每次请求轮询取一个，分散请求避免 `-110` 限流。
+2. **直链缓存**：歌曲直链按 `url:{id}:{level}` 缓存，TTL 1100s（网易直链约 20 分钟过期）。
+
+**方式一（Workers Builds）启用步骤**：
+1. Cloudflare 控制台 → `Workers & Pages` → `KV` → `Create a namespace`，命名为 `NETEASE_KV`，复制其 ID。
+2. 编辑 `wrangler.toml`，取消 `[[kv_namespaces]]` 注释并把 `id` 换成真实值，`git push` 触发重建。
+3. 写入 Cookie 池（命令见下，也可在控制台 KV 页手动添加键 `cookie_list`）。
+
+**方式二（本地 wrangler）启用步骤**：
+
+```bash
+wrangler kv namespace create NETEASE_KV   # 拿到 id，填进 wrangler.toml
+```
+
+写入 / 查看 / 清空 Cookie 池：
 
 ```bash
 wrangler kv key put --binding NETEASE_KV cookie_list \
   '["MUSIC_U=aaaa; os=pc;","MUSIC_U=bbbb; os=pc;","MUSIC_U=cccc; os=pc;"]'
-```
-
-查看 / 清空：
-
-```bash
 wrangler kv key get  --binding NETEASE_KV cookie_list
 wrangler kv key delete --binding NETEASE_KV cookie_index   # 重置轮询游标
 ```
 
-> 请求中仍可用 `?cookie=` 或请求头 `x-ner-cookie` 临时覆盖服务端 Cookie（优先级最高）。
+> 请求也可用 `?cookie=` 或请求头 `x-ner-cookie` 临时覆盖服务端 Cookie（优先级最高）。
 
-本地调试：
+## 本地调试
 
 ```bash
-wrangler dev
+wrangler dev                                   # 默认 http://localhost:8787，自动托管 public/index.html
+COOKIE='MUSIC_U=xxx' wrangler dev              # 带 Cookie 测 VIP 音质
+wrangler dev --ip 0.0.0.0 --port 8787          # 局域网访问（手机/其他设备可打开）
 ```
 
 ## API
