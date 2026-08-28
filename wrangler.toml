@@ -1,19 +1,21 @@
-name = "netease-worker"
+name = "cfworker-netease-url"
 main = "src/worker.js"
 compatibility_date = "2024-09-23"
 
-# 设置 Cookie（黑胶会员账号）：wrangler secret put COOKIE
+# 设置 Cookie（黑胶会员账号）：在 Cloudflare 控制台 Workers → 本Worker → Settings → Variables 添加 COOKIE 秘密
 # COOKIE 格式例如：MUSIC_U=xxxx; os=pc; appver=8.9.70;
 [vars]
 # 留空即可，部署后用 secret 设置
 COOKIE = ""
 
-# KV 存储：Cookie 池 + 直链缓存
-# 创建命名空间：wrangler kv namespace create NETEASE_KV
-# 将其 id 填入下面的 id 字段
-[[kv_namespaces]]
-binding = "NETEASE_KV"
-id = "00000000000000000000000000000000"
+# KV 存储：Cookie 池 + 直链缓存（可选）
+# 启用步骤：
+#   1) 创建命名空间：wrangler kv namespace create NETEASE_KV
+#   2) 取消下面注释，并把 id 换成真实值
+#   3) git push 触发重新构建
+# [[kv_namespaces]]
+# binding = "NETEASE_KV"
+# id = "你的真实KV命名空间id"
 
 [assets]
 directory = "public"
