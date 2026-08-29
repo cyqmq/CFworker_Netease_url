@@ -497,6 +497,7 @@ async function handleSong(data, cookieStr, kv) {
       const r = await getSongUrl(musicId, level, cookieStr, kv);
       const d = r?.data?.[0];
       if (!d || !d.url) return err('获取音乐 URL 失败，可能是版权限制或音质不支持', 404);
+      await recordUsage(kv, cookieStr, d.size || 0);
       return ok({
         id: d.id, url: d.url, level: d.level,
         quality_name: QUALITY_NAMES[d.level] || d.level,
@@ -528,7 +529,7 @@ async function handleSong(data, cookieStr, kv) {
       tlyric: lyricInfo?.tlyric?.lyric || '',
     };
     const ud = urlInfo?.data?.[0];
-    if (ud && ud.url) { out.url = ud.url; out.size = formatSize(ud.size); out.level = ud.level; }
+    if (ud && ud.url) { out.url = ud.url; out.size = formatSize(ud.size); out.level = ud.level; await recordUsage(kv, cookieStr, ud.size || 0); }
     else { out.url = ''; out.size = '获取失败'; }
     return ok(out, '获取歌曲信息成功');
   } catch (e) {
@@ -626,6 +627,7 @@ async function handleDownload(data, cookieStr, request, kv) {
     if (!ud || !ud.url) return err('无法获取下载链接，可能是版权限制或音质不支持', 404);
 
     if (format === 'json') {
+      await recordUsage(kv, cookieStr, ud.size || 0);
       return ok({
         music_id: id, name: sd.name,
         artist: (sd.ar || []).map((a) => a.name).join(', '),
@@ -641,6 +643,8 @@ async function handleDownload(data, cookieStr, request, kv) {
     const filename = `${safe}.${ud.type}`;
     const upstream = await fetch(ud.url, { headers: { 'User-Agent': UA, 'Referer': REFERER } });
     if (!upstream.ok) return err('上游下载失败: ' + upstream.status, 502);
+    const cl = parseInt(upstream.headers.get('content-length') || '0', 10);
+    await recordUsage(kv, cookieStr, cl || (ud.size || 0));
     return new Response(upstream.body, {
       status: 200,
       headers: {
@@ -652,6 +656,167 @@ async function handleDownload(data, cookieStr, request, kv) {
   } catch (e) {
     return err('下载异常: ' + e.message, 500);
   }
+}
+
+/* ============================ 管理后台 ============================ */
+
+function maskCookie(c) {
+  return String(c).replace(/MUSIC_U=([0-9a-fA-F]+)/, (_, p) => 'MUSIC_U=' + p.slice(0, 6) + '…' + p.slice(-4));
+}
+function vipLabel(t) {
+  if (t === 11) return '黑胶VIP';
+  if (t === 10 || t === 1) return '音乐包';
+  if (t === 0) return '普通用户';
+  return '类型' + t;
+}
+
+/* 流量/用量统计：按 cookie 哈希记录请求数与解析流量（歌曲体积） */
+async function recordUsage(kv, cookieStr, bytes) {
+  if (!kv) return;
+  try {
+    const hash = md5hex(cookieStr || 'anon');
+    let stats = {};
+    try { stats = JSON.parse(await kv.get('stats') || '{}'); } catch (_) {}
+    stats.total_requests = (stats.total_requests || 0) + 1;
+    stats.total_bytes = (stats.total_bytes || 0) + (bytes || 0);
+    stats.by_cookie = stats.by_cookie || {};
+    const bc = stats.by_cookie[hash] = stats.by_cookie[hash] || { used: 0, bytes: 0 };
+    bc.used += 1; bc.bytes += (bytes || 0);
+    await kv.put('stats', JSON.stringify(stats));
+  } catch (_) {}
+}
+
+/* 校验某个 Cookie 是否有效，并取回账号昵称 / VIP 类型与等级 */
+async function checkCookie(cookieStr) {
+  const info = { valid: false };
+  let r = null;
+  try { r = await eapiRequest('https://music.163.com/eapi/user/account/get', {}, cookieStr); }
+  catch (e) { info.msg = String(e); }
+  if (r && r.code === 200) {
+    info.valid = true;
+    info.code = r.code;
+    const acc = r.account || (r.data && r.data.account) || {};
+    const prof = r.profile || (r.data && r.data.profile) || {};
+    const vip = r.data || {};
+    info.userName = prof.nickname || acc.userName || '';
+    info.userId = acc.userId || (prof && prof.userId) || '';
+    info.vipType = (acc.vipType !== undefined) ? acc.vipType
+      : ((vip.vipType !== undefined) ? vip.vipType : null);
+    info.vipLevel = (acc.vipLevel !== undefined) ? acc.vipLevel
+      : ((vip.vipLevel !== undefined) ? vip.vipLevel : null);
+  } else if (r) {
+    info.msg = (r.msg || r.message) || 'code ' + r.code;
+    info.code = r.code;
+  }
+  return info;
+}
+
+function genAdminToken() {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  return Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+async function checkAdmin(request, kv) {
+  if (!kv) return false;
+  const t = request.headers.get('x-admin-token') || '';
+  if (!t) return false;
+  try {
+    const rec = await kv.get('admin_token');
+    if (!rec) return false;
+    const o = JSON.parse(rec);
+    return o.token === t && o.exp > Date.now();
+  } catch (_) { return false; }
+}
+
+async function handleAdminLogin(data, kv) {
+  const pw = await kv.get('admin_password');
+  if (!pw) return ok({ needs_setup: true }, '请先设置管理密码');
+  if (data.password !== pw) return err('密码错误', 401);
+  const token = genAdminToken();
+  await kv.put('admin_token', JSON.stringify({ token, exp: Date.now() + 2 * 3600 * 1000 }));
+  return ok({ token });
+}
+async function handleAdminSetup(data, kv) {
+  if (await kv.get('admin_password')) return err('已设置密码，请直接登录', 400);
+  if (!data.password || data.password.length < 4) return err('密码至少 4 位', 400);
+  await kv.put('admin_password', data.password);
+  const token = genAdminToken();
+  await kv.put('admin_token', JSON.stringify({ token, exp: Date.now() + 2 * 3600 * 1000 }));
+  return ok({ token });
+}
+async function handleAdminInfo(kv) {
+  let stats = {}; let list = []; let meta = {};
+  try { stats = JSON.parse(await kv.get('stats') || '{}'); } catch (_) {}
+  try { list = JSON.parse(await kv.get('cookie_list') || '[]'); } catch (_) {}
+  try { meta = JSON.parse(await kv.get('cookie_meta') || '{}'); } catch (_) {}
+  let cacheCount = 0;
+  try { const k = await kv.list({ prefix: 'url:' }); cacheCount = k.keys.length; } catch (_) {}
+  const cookies = (Array.isArray(list) ? list : []).map((c, i) => {
+    const hash = md5hex(buildCookie(c));
+    const m = meta[hash] || {};
+    const sm = (stats.by_cookie && stats.by_cookie[hash]) || {};
+    return {
+      index: i, masked: maskCookie(c), valid: !!m.valid,
+      userName: m.userName || '', vipType: (m.vipType !== undefined) ? m.vipType : null,
+      vipLevel: (m.vipLevel !== undefined) ? m.vipLevel : null,
+      vipLabel: (m.vipType != null) ? vipLabel(m.vipType) : '', lastCheck: m.lastCheck || 0,
+      used: sm.used || 0, bytes: sm.bytes || 0,
+    };
+  });
+  return ok({
+    stats: { total_requests: stats.total_requests || 0, total_bytes: stats.total_bytes || 0, cache_count: cacheCount },
+    cookies,
+  });
+}
+async function handleAdminCookieCheck(kv) {
+  let list = [];
+  try { list = JSON.parse(await kv.get('cookie_list') || '[]'); } catch (_) {}
+  const meta = {};
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    const hash = md5hex(buildCookie(c));
+    const info = await checkCookie(buildCookie(c));
+    meta[hash] = {
+      valid: info.valid, userName: info.userName, userId: info.userId,
+      vipType: info.vipType, vipLevel: info.vipLevel, lastCheck: Date.now(), msg: info.msg || '',
+    };
+  }
+  await kv.put('cookie_meta', JSON.stringify(meta));
+  return ok({ checked: list.length }, '已刷新 Cookie 状态');
+}
+async function handleAdminCookieAdd(data, kv) {
+  let list = [];
+  try { list = JSON.parse(await kv.get('cookie_list') || '[]'); } catch (_) {}
+  const c = (data.cookie || '').trim();
+  if (!c) return err('cookie 不能为空', 400);
+  list.push(c);
+  await kv.put('cookie_list', JSON.stringify(list));
+  return ok({ count: list.length }, '已添加');
+}
+async function handleAdminCookieRemove(data, kv) {
+  let list = [];
+  try { list = JSON.parse(await kv.get('cookie_list') || '[]'); } catch (_) {}
+  const idx = parseInt(data.index, 10);
+  if (isNaN(idx) || idx < 0 || idx >= list.length) return err('无效的 index', 400);
+  list.splice(idx, 1);
+  await kv.put('cookie_list', JSON.stringify(list));
+  return ok({ count: list.length }, '已删除');
+}
+async function handleAdminCacheClear(kv) {
+  let n = 0;
+  try {
+    const k = await kv.list({ prefix: 'url:' });
+    for (const key of k.keys) { await kv.delete(key.name); n++; }
+  } catch (_) {}
+  return ok({ deleted: n }, '已清空 URL 缓存');
+}
+async function handleAdminPassword(data, kv) {
+  const cur = await kv.get('admin_password');
+  if (!cur) return err('尚未设置密码', 400);
+  if (data.old !== cur) return err('原密码错误', 401);
+  if (!data.password || data.password.length < 4) return err('新密码至少 4 位', 400);
+  await kv.put('admin_password', data.password);
+  return ok({}, '密码已修改');
 }
 
 /* ============================ 入口 ============================ */
@@ -700,6 +865,19 @@ export default {
         endpoints: { '/health': '健康检查', '/song': '单曲解析', '/search': '搜索', '/playlist': '歌单', '/album': '专辑', '/download': '下载/解析' },
         supported_qualities: VALID_LEVELS,
       });
+    }
+
+    // 管理后台（独立鉴权，绕过 API_TOKEN）
+    if (p === '/admin/login') return handleAdminLogin(data, kv);
+    if (p === '/admin/setup') return handleAdminSetup(data, kv);
+    if (p.startsWith('/admin/')) {
+      if (!(await checkAdmin(request, kv))) return err('未授权，请先登录', 401);
+      if (p === '/admin/info') return handleAdminInfo(kv);
+      if (p === '/admin/cookie/check') return handleAdminCookieCheck(kv);
+      if (p === '/admin/cookie/add') return handleAdminCookieAdd(data, kv);
+      if (p === '/admin/cookie/remove') return handleAdminCookieRemove(data, kv);
+      if (p === '/admin/cache/clear') return handleAdminCacheClear(kv);
+      if (p === '/admin/password') return handleAdminPassword(data, kv);
     }
 
     // API 鉴权（API_TOKEN 留空或 KV 无 api_token 则关闭）

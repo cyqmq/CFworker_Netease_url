@@ -32,7 +32,8 @@
 <header>
   <h1>🎵 网易云音乐无损解析</h1>
   <span class="sub">Cloudflare Worker 版 · 移植自 Suxiaoqinx/Netease_url</span>
-  <button id="login-btn" class="sec" style="margin-left:auto" onclick="onLoginClick()">登录</button>
+  <button id="admin-btn" class="sec" style="margin-left:auto" onclick="onAdminClick()">管理</button>
+  <button id="login-btn" class="sec" style="margin-left:8px" onclick="onLoginClick()">登录</button>
 </header>
 <main>
   <div class="tabs">
@@ -74,6 +75,47 @@
       <div id="qr" style="width:200px;height:200px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;"></div>
       <div id="qr-status" style="color:var(--muted);font-size:13px;margin:12px 0;">请用网易云 App 扫码</div>
       <button class="sec" onclick="closeLogin()">关闭</button>
+    </div>
+  </div>
+
+  <div id="admin-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:60;align-items:center;justify-content:center;overflow:auto;">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(780px,92vw);max-height:88vh;overflow:auto;">
+      <div style="display:flex;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0">管理后台</h3>
+        <button class="sec" style="margin-left:auto" onclick="closeAdmin()">关闭</button>
+      </div>
+      <div id="admin-login" style="text-align:center;padding:20px 0;">
+        <div id="admin-login-title" style="margin-bottom:12px;color:var(--muted)">请输入管理密码</div>
+        <input id="admin-pw" type="password" placeholder="管理密码" style="max-width:280px" />
+        <div class="row" style="justify-content:center;margin-top:12px"><button id="admin-login-btn" onclick="adminLogin()">登录</button></div>
+      </div>
+      <div id="admin-dash" style="display:none">
+        <div id="admin-overview" class="row" style="gap:12px"></div>
+        <div class="row" style="margin-top:8px">
+          <button onclick="adminCheckCookies()">刷新 Cookie 状态</button>
+          <button class="sec" onclick="adminClearCache()">清空 URL 缓存</button>
+          <button class="sec" onclick="adminShowAdd()">添加 Cookie</button>
+          <button class="sec" onclick="adminShowPw()">修改密码</button>
+          <button class="sec" onclick="adminLogout()">退出</button>
+        </div>
+        <div id="admin-add" style="display:none;margin:12px 0;padding:12px;border:1px solid var(--border);border-radius:8px">
+          <div class="hint">粘贴一条 Cookie（需含 MUSIC_U=...），加入 KV 共享池</div>
+          <textarea id="admin-cookie-input" rows="3" style="width:100%;background:#0c0e12;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px"></textarea>
+          <div class="row" style="margin-top:8px"><button onclick="adminAddCookie()">保存</button></div>
+        </div>
+        <div id="admin-pw-box" style="display:none;margin:12px 0;padding:12px;border:1px solid var(--border);border-radius:8px">
+          <input id="admin-old-pw" type="password" placeholder="原密码" style="margin-bottom:8px" />
+          <input id="admin-new-pw" type="password" placeholder="新密码（≥4位）" />
+          <div class="row" style="margin-top:8px"><button onclick="adminChangePw()">修改</button></div>
+        </div>
+        <div id="admin-msg" class="hint"></div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">
+          <thead><tr style="color:var(--muted);text-align:left">
+            <th style="padding:6px">#</th><th>Cookie</th><th>状态</th><th>账号</th><th>VIP</th><th>使用</th><th>流量</th><th>检查</th><th></th>
+          </tr></thead>
+          <tbody id="admin-cookie-rows"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -214,7 +256,88 @@
         clearInterval(qrTimer);
         if (c.data.cookie) localStorage.setItem(COOKIE_KEY, c.data.cookie);
         document.getElementById('qr-status').textContent = '登录成功！';
-        updateLoginBtn();
+  updateLoginBtn();
+
+  /* ===== 管理后台（密码存于 KV admin_password，登录后 token 存本机） ===== */
+  const ADMIN_TOKEN_KEY = 'ner_admin_token';
+  const adminApi = async (path, body, extra) => {
+    const headers = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+    const opt = { method: body ? 'POST' : 'GET', headers };
+    if (body) opt.body = JSON.stringify(body);
+    const r = await fetch(path, opt);
+    return r.json();
+  };
+  const adminToken = () => ({ 'x-admin-token': localStorage.getItem(ADMIN_TOKEN_KEY) });
+  const fmtSize = (b) => {
+    b = Number(b) || 0;
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+  };
+  const card = (t, v) => `<div style="flex:1;min-width:120px;background:#0c0e12;border:1px solid var(--border);border-radius:8px;padding:12px"><div style="color:var(--muted);font-size:12px">${t}</div><div style="font-size:20px;margin-top:4px">${v}</div></div>`;
+
+  function onAdminClick() { document.getElementById('admin-modal').style.display = 'flex'; adminInit(); }
+  function closeAdmin() { document.getElementById('admin-modal').style.display = 'none'; }
+  function adminInit() {
+    const t = localStorage.getItem(ADMIN_TOKEN_KEY);
+    const loginBox = document.getElementById('admin-login');
+    const dash = document.getElementById('admin-dash');
+    if (!t) { loginBox.style.display = 'block'; dash.style.display = 'none'; document.getElementById('admin-login-title').textContent = '请输入管理密码'; }
+    else { loginBox.style.display = 'none'; dash.style.display = 'block'; loadAdmin(); }
+  }
+  async function adminLogin() {
+    const pw = document.getElementById('admin-pw').value;
+    const r = await adminApi('/admin/login', { password: pw });
+    if (r.data && r.data.token) { localStorage.setItem(ADMIN_TOKEN_KEY, r.data.token); adminInit(); }
+    else if (r.data && r.data.needs_setup) {
+      if (confirm('尚未设置管理密码，是否用当前输入作为管理密码？')) {
+        const s = await adminApi('/admin/setup', { password: pw });
+        if (s.data && s.data.token) { localStorage.setItem(ADMIN_TOKEN_KEY, s.data.token); adminInit(); }
+        else show('admin-msg', s);
+      }
+    } else show('admin-msg', r);
+  }
+  function adminLogout() { localStorage.removeItem(ADMIN_TOKEN_KEY); adminInit(); }
+  async function loadAdmin() {
+    const r = await adminApi('/admin/info', null, adminToken());
+    if (!r.success) { show('admin-msg', r); return; }
+    const s = r.data.stats;
+    document.getElementById('admin-overview').innerHTML =
+      card('总请求', s.total_requests) + card('解析流量', fmtSize(s.total_bytes)) +
+      card('URL 缓存', s.cache_count + ' 条') + card('Cookie 数', r.data.cookies.length);
+    const rows = r.data.cookies.map(c => {
+      const last = c.lastCheck ? new Date(c.lastCheck).toLocaleString() : '-';
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:6px">${c.index}</td>
+        <td style="font-family:monospace">${c.masked}</td>
+        <td>${c.valid ? '<span style="color:#5fce6b">有效</span>' : '<span style="color:#ff6b6b">失效</span>'}</td>
+        <td>${c.userName || '-'}</td>
+        <td>${c.vipLabel || '-'}</td>
+        <td>${c.used || 0}</td>
+        <td>${fmtSize(c.bytes)}</td>
+        <td style="font-size:11px;color:var(--muted)">${last}</td>
+        <td><button class="sec" style="padding:4px 8px;font-size:12px" onclick="adminRemove(${c.index})">删</button></td>
+      </tr>`;
+    }).join('');
+    document.getElementById('admin-cookie-rows').innerHTML = rows || '<tr><td colspan="9" style="padding:12px;color:var(--muted)">暂无 Cookie</td></tr>';
+  }
+  async function adminCheckCookies() { show('admin-msg', '刷新中…'); const r = await adminApi('/admin/cookie/check', {}, adminToken()); show('admin-msg', r); loadAdmin(); }
+  async function adminClearCache() { const r = await adminApi('/admin/cache/clear', {}, adminToken()); show('admin-msg', r); loadAdmin(); }
+  function adminShowAdd() { const e = document.getElementById('admin-add'); e.style.display = e.style.display === 'none' ? 'block' : 'none'; }
+  async function adminAddCookie() {
+    const c = document.getElementById('admin-cookie-input').value;
+    const r = await adminApi('/admin/cookie/add', { cookie: c }, adminToken());
+    show('admin-msg', r); document.getElementById('admin-cookie-input').value = ''; loadAdmin();
+  }
+  async function adminRemove(i) { const r = await adminApi('/admin/cookie/remove', { index: i }, adminToken()); show('admin-msg', r); loadAdmin(); }
+  function adminShowPw() { const e = document.getElementById('admin-pw-box'); e.style.display = e.style.display === 'none' ? 'block' : 'none'; }
+  async function adminChangePw() {
+    const o = document.getElementById('admin-old-pw').value, n = document.getElementById('admin-new-pw').value;
+    const r = await adminApi('/admin/password', { old: o, password: n }, adminToken());
+    show('admin-msg', r);
+  }
+
         setTimeout(closeLogin, 800);
       } else if (code === 800) {
         clearInterval(qrTimer);
