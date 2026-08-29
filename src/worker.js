@@ -884,6 +884,13 @@ export default {
       });
     }
 
+    if (p === '/__debug') {
+      const info = { hasAssets: !!env.ASSETS };
+      try { const r = await env.ASSETS.fetch(request); info.status = r.status; info.head = (await r.text()).slice(0, 60); }
+      catch (e) { info.err = String(e); }
+      return ok(info);
+    }
+
     // 管理后台（独立鉴权，绕过 API_TOKEN）
     if (p === '/admin/login') return handleAdminLogin(data, kv);
     if (p === '/admin/setup') return handleAdminSetup(data, kv);
