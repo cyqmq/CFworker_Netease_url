@@ -402,17 +402,28 @@ async function resolveApiToken(kv, env) {
   return '';
 }
 
+/* 判断请求是否来自同源（即你自己部署的页面）。Origin/Referer 的 host 与请求 host 一致即为同源 */
+function isSameOrigin(request, url) {
+  const origin = request.headers.get('Origin');
+  if (origin) { try { if (new URL(origin).host === url.host) return true; } catch (_) {} }
+  const referer = request.headers.get('Referer');
+  if (referer) { try { if (new URL(referer).host === url.host) return true; } catch (_) {} }
+  return false;
+}
+
 function checkAuth(request, url, apiToken) {
   const p = url.pathname.toLowerCase();
   if (p === '/health' || p === '/api/info') return null; // 放行健康检查与信息接口
   if (!apiToken) return null; // 未配置则关闭鉴权（兼容调试/自用）
+  if (isSameOrigin(request, url)) return null; // 同源（你自己的页面）免 token
+  // 外部调用：必须携带正确 token
   const auth = request.headers.get('Authorization') || '';
   let provided = '';
   if (auth.toLowerCase().startsWith('bearer ')) provided = auth.slice(7).trim();
   if (!provided) provided = request.headers.get('x-api-key') || '';
   if (!provided) provided = url.searchParams.get('token') || '';
   if (provided && provided === apiToken) return null;
-  return err('未授权：缺少或错误的 API Token', 401);
+  return err('未授权：外部调用需携带正确的 API Token', 401);
 }
 
 /* ============================ 路由 ============================ */

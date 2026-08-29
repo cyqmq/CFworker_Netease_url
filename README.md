@@ -71,23 +71,27 @@ wrangler secret put COOKIE
 
 ### API 鉴权（API_TOKEN，防滥用）
 
-新增一个变量 **`API_TOKEN`**，所有解析接口都必须携带正确 Token，否则返回 `401`。`/health`、`/api/info` 免鉴权。
+新增一个变量 **`API_TOKEN`**，用于防止别人把你部署的 Worker 当公共 API 滥用。**Token 只存在于服务端变量，前端页面不存放、也不展示。**
+
+鉴权规则：
+- `API_TOKEN` **未设置** → 关闭鉴权（兼容调试/自用）。
+- `API_TOKEN` **已设置**：
+  - **同源请求**（来自你自己的页面，即请求 `Origin`/`Referer` 的域名与 Worker 域名一致）→ 自动放行，前端页面正常用，**无需任何 token**。
+  - **外部请求**（curl、其他网站调用等）→ 必须携带正确 Token，否则返回 `401`。
 
 - **设置方式**：Cloudflare 控制台 → `Settings` → `Variables and Secrets` → `Add` → 名称 `API_TOKEN`、值自定义一个强随机串、类型选 **Secret**。
   - 若用 Workers Builds 自动部署把控制台变量清空了，可在 KV 命名空间 `NETEASE_KV` 里加一个键 **`api_token`**（值同上）作为兜底，Worker 会优先用环境变量、没有再读 KV。
-  - **留空 = 关闭鉴权**（兼容调试/自用，但不防滥用）。
-- **携带 Token 的三种方式**（任选其一）：
+- **外部调用携带 Token 的三种方式**（任选其一）：
   - 请求头 `Authorization: Bearer <token>`
   - 请求头 `x-api-key: <token>`
   - 查询参数 `?token=<token>`（适合分享链接 / 直接下载跳转）
 
 ```bash
-# 带 Token 调用示例
+# 外部调用需带 Token
 curl -H "x-api-key: YOUR_TOKEN" "https://你的worker/song?id=195251&level=exhigh&type=url"
 curl "https://你的worker/song?id=195251&level=exhigh&type=url&token=YOUR_TOKEN"
+# 无 token 的外部请求 → 401
 ```
-
-> Web 页面已内置 Token 输入框（自动记忆到 localStorage），所有请求会自动带上。
 
 ### KV（可选，推荐：Cookie 池 + 直链缓存）
 

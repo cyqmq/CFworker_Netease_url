@@ -34,7 +34,6 @@
   <span class="sub">Cloudflare Worker 版 · 移植自 Suxiaoqinx/Netease_url</span>
 </header>
 <main>
-  <div class="row"><input id="api-token" placeholder="API Token（部署时设置的 API_TOKEN，留空则不使用鉴权）" /></div>
   <div class="tabs">
     <div class="tab active" data-t="song">单曲解析</div>
     <div class="tab" data-t="search">歌曲搜索</div>
@@ -104,16 +103,7 @@
 </main>
 
 <script>
-  const tkEl = document.getElementById('api-token');
-  tkEl.value = localStorage.getItem('ner_api_token') || '';
-  tkEl.addEventListener('input', () => localStorage.setItem('ner_api_token', tkEl.value.trim()));
-  const getToken = () => (tkEl.value || '').trim();
-  const api = (path, body) => {
-    const headers = { 'Content-Type': 'application/json' };
-    const t = getToken();
-    if (t) headers['x-api-key'] = t;
-    return fetch(path, { method:'POST', headers, body: JSON.stringify(body) }).then(r=>r.json());
-  };
+  const api = (path, body) => fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r=>r.json());
   const show = (id, v) => { document.getElementById(id).textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2); };
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
@@ -158,9 +148,7 @@
     const quality = document.getElementById('dl-quality').value;
     if (!id) return;
     if (file) {
-      let u = '/download?format=file&id=' + encodeURIComponent(id) + '&quality=' + quality;
-      const t = getToken(); if (t) u += '&token=' + encodeURIComponent(t);
-      window.open(u, '_blank');
+      window.open('/download?format=file&id=' + encodeURIComponent(id) + '&quality=' + quality, '_blank');
       show('dl-out', '已在新标签页开始下载…');
     } else {
       const r = await api('/download', { id, quality, format:'json' });
