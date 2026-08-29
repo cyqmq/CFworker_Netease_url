@@ -696,6 +696,7 @@ async function checkCookie(cookieStr) {
     info.code = r.code;
     if (r.code === 200) {
       info.valid = true;
+      info.raw = JSON.stringify(r).slice(0, 700);
       const d = r.data || r;
       info.userName = (d.profile && d.profile.nickname) || d.nickname || (d.account && d.account.userName) || '';
       info.userId = d.userId || (d.account && d.account.userId) || '';
@@ -755,9 +756,10 @@ async function handleAdminInfo(kv) {
     const sm = (stats.by_cookie && stats.by_cookie[hash]) || {};
     return {
       index: i, masked: maskCookie(c), valid: !!m.valid,
-      userName: m.userName || '', vipType: (m.vipType !== undefined) ? m.vipType : null,
+      userName: m.userName || '',       vipType: (m.vipType !== undefined) ? m.vipType : null,
       vipLevel: (m.vipLevel !== undefined) ? m.vipLevel : null,
-      vipLabel: (m.vipType != null) ? vipLabel(m.vipType) : '', lastCheck: m.lastCheck || 0,
+      vipLabel: (m.vipType != null) ? vipLabel(m.vipType) : '',
+      raw: m.raw || '', lastCheck: m.lastCheck || 0,
       used: sm.used || 0, bytes: sm.bytes || 0,
     };
   });
@@ -776,7 +778,8 @@ async function handleAdminCookieCheck(kv) {
     const info = await checkCookie(buildCookie(c));
     meta[hash] = {
       valid: info.valid, userName: info.userName, userId: info.userId,
-      vipType: info.vipType, vipLevel: info.vipLevel, lastCheck: Date.now(), msg: info.msg || '',
+      vipType: info.vipType, vipLevel: info.vipLevel, raw: info.raw || '',
+      lastCheck: Date.now(), msg: info.msg || '',
     };
   }
   await kv.put('cookie_meta', JSON.stringify(meta));
