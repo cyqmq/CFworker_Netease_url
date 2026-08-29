@@ -166,6 +166,32 @@ function aesEncryptBlock(block, w) {
   return state;
 }
 
+/* AES-128-CBC（用于 weapi 双重加密的第二层）。keyBytes/ivBytes 均为 16 字节，PKCS7 填充 */
+function aesCbcEncrypt(plainBytes, keyBytes, ivBytes) {
+  const padLen = 16 - (plainBytes.length % 16);
+  const padded = new Uint8Array(plainBytes.length + padLen);
+  padded.set(plainBytes);
+  for (let i = 0; i < padLen; i++) padded[plainBytes.length + i] = padLen;
+  const w = keyExpansion(keyBytes);
+  const out = new Uint8Array(padded.length);
+  let prev = ivBytes;
+  for (let i = 0; i < padded.length; i += 16) {
+    const block = padded.subarray(i, i + 16);
+    const xored = new Uint8Array(16);
+    for (let j = 0; j < 16; j++) xored[j] = block[j] ^ prev[j];
+    const enc = aesEncryptBlock(xored, w);
+    out.set(enc, i);
+    prev = enc;
+  }
+  return out;
+}
+
+function bytesToBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
 /* 匹配 Python json.dumps 默认格式 (ensure_ascii=True, ", " 与 ": ") */
 function pyJson(obj) {
   if (obj === null || obj === undefined) return 'null';
@@ -272,6 +298,74 @@ async function apiRequest(url, form, cookieStr, method = 'POST') {
   }
   const resp = await fetch(url, { method, headers, body });
   return resp.json();
+}
+
+/* ============================ 扫码登录（weapi） ============================ */
+
+const WEAPI_IV = enc('0102030405060708');
+const WEAPI_NONCE = enc('0CoJUm6Qyw8W8jud');
+const WEAPI_MODULUS =
+  '00e0b509f6259df8642dbc35665918c6d9e719e1e5a5b1e6b3d4f3c2a1c4e3b2a190f8f8b5b5e0e3b3c2d1e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3';
+
+function createSecret(size) {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const buf = new Uint8Array(size);
+  crypto.getRandomValues(buf);
+  let s = '';
+  for (let i = 0; i < size; i++) s += chars[buf[i] % chars.length];
+  return s;
+}
+
+/* RSA-1024：将 16 字节随机密钥（反转后）做 m^e mod N，结果 hex 左补至 256 字符 */
+function rsaEncrypt(randStr) {
+  const reversed = randStr.split('').reverse().join('');
+  const bytes = enc(reversed);
+  let hex = '';
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+  const m = BigInt('0x' + hex);
+  const N = BigInt('0x' + WEAPI_MODULUS);
+  const e = 0x010001n;
+  const c = m ** e % N;
+  return c.toString(16).padStart(256, '0');
+}
+
+function weapiEncrypt(data) {
+  const text = pyJson(data);
+  const rand = createSecret(16);
+  const inner = aesCbcEncrypt(enc(text), WEAPI_NONCE, WEAPI_IV);
+  const outer = aesCbcEncrypt(inner, enc(rand), WEAPI_IV);
+  const params = bytesToBase64(outer);
+  const encSecKey = rsaEncrypt(rand);
+  return { params, encSecKey };
+}
+
+async function weapiRequest(url, data, cookieStr) {
+  const { params, encSecKey } = weapiEncrypt(data);
+  const body = `params=${encodeURIComponent(params)}&encSecKey=${encodeURIComponent(encSecKey)}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { ...baseHeaders(cookieStr), 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  return resp.json();
+}
+
+async function handleQrGenerate() {
+  const r = await weapiRequest('https://music.163.com/weapi/login/qrcode/key', { type: 0 }, '');
+  const unikey = r && r.unikey;
+  if (!unikey) return err('获取二维码失败: ' + JSON.stringify(r), 500);
+  return ok({ unikey, qr_url: `https://music.163.com/login?codekey=${unikey}` }, '获取二维码成功');
+}
+
+async function handleQrCheck(key) {
+  if (!key) return err("必须提供 'key'");
+  const r = await weapiRequest('https://music.163.com/weapi/login/qrcode/check', { key, type: 1 }, '');
+  const code = (r && r.code) || 0;
+  return ok({
+    code,
+    cookie: code === 803 ? (r.cookie || '') : '',
+    message: (r && r.message) || '',
+  }, '检查完成');
 }
 
 /* ============================ 网易云 API ============================ */
@@ -413,7 +507,7 @@ function isSameOrigin(request, url) {
 
 function checkAuth(request, url, apiToken) {
   const p = url.pathname.toLowerCase();
-  if (p === '/health' || p === '/api/info') return null; // 放行健康检查与信息接口
+  if (p === '/health' || p === '/api/info' || p.startsWith('/login/qr')) return null; // 放行健康检查、信息接口与扫码登录
   if (!apiToken) return null; // 未配置则关闭鉴权（兼容调试/自用）
   if (isSameOrigin(request, url)) return null; // 同源（你自己的页面）免 token
   // 外部调用：必须携带正确 token
@@ -660,6 +754,8 @@ export default {
     if (p === '/playlist' || p === '/playlist') return handlePlaylist(data, cookieStr);
     if (p === '/album' || p === '/album') return handleAlbum(data, cookieStr);
     if (p === '/download' || p === '/download') return handleDownload(data, cookieStr, request, kv);
+    if (p === '/login/qr/generate') return handleQrGenerate();
+    if (p === '/login/qr/check') return handleQrCheck(url.searchParams.get('key') || (data && data.key));
 
     return new Response('Netease Worker. Try /api/info', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   },

@@ -32,6 +32,7 @@
 <header>
   <h1>🎵 网易云音乐无损解析</h1>
   <span class="sub">Cloudflare Worker 版 · 移植自 Suxiaoqinx/Netease_url</span>
+  <button id="login-btn" class="sec" style="margin-left:auto" onclick="onLoginClick()">登录</button>
 </header>
 <main>
   <div class="tabs">
@@ -63,9 +64,18 @@
       </select>
       <button onclick="doSong()">解析</button>
     </div>
-    <div class="hint">VIP 音质需要部署时配置黑胶会员 Cookie（wrangler secret put COOKIE）。</div>
+    <div class="hint">VIP 音质需登录黑胶会员：点右上角「登录」扫码，Cookie 仅存你本机浏览器，不占用服务端。未登录时也可用部署端 KV 里的共享 Cookie 池。</div>
     <pre id="song-out">// 结果将显示在这里</pre>
   </section>
+
+  <div id="login-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;align-items:center;justify-content:center;">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:320px;text-align:center;">
+      <h3 style="margin:0 0 12px">扫码登录网易云</h3>
+      <div id="qr" style="width:200px;height:200px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;"></div>
+      <div id="qr-status" style="color:var(--muted);font-size:13px;margin:12px 0;">请用网易云 App 扫码</div>
+      <button class="sec" onclick="closeLogin()">关闭</button>
+    </div>
+  </div>
 
   <section class="panel" id="p-search">
     <div class="row"><input id="search-kw" placeholder="关键词，如：周杰伦 稻香" /></div>
@@ -102,8 +112,16 @@
   </section>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <script>
-  const api = (path, body) => fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r=>r.json());
+  const COOKIE_KEY = 'ner_cookie';
+  const getCookie = () => localStorage.getItem(COOKIE_KEY) || '';
+  const api = (path, body) => {
+    const headers = { 'Content-Type': 'application/json' };
+    const c = getCookie();
+    if (c) headers['x-ner-cookie'] = c;
+    return fetch(path, { method:'POST', headers, body: JSON.stringify(body) }).then(r=>r.json());
+  };
   const show = (id, v) => { document.getElementById(id).textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2); };
 
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
@@ -148,7 +166,10 @@
     const quality = document.getElementById('dl-quality').value;
     if (!id) return;
     if (file) {
-      window.open('/download?format=file&id=' + encodeURIComponent(id) + '&quality=' + quality, '_blank');
+      let u = '/download?format=file&id=' + encodeURIComponent(id) + '&quality=' + quality;
+      const c = getCookie();
+      if (c) u += '&cookie=' + encodeURIComponent(c);
+      window.open(u, '_blank');
       show('dl-out', '已在新标签页开始下载…');
     } else {
       const r = await api('/download', { id, quality, format:'json' });
@@ -162,6 +183,56 @@
   }
   // 健康检查
   fetch('/health').then(r=>r.json()).then(d=>console.log('health', d)).catch(()=>{});
+
+  /* ===== 扫码登录（Cookie 存本机，不占用服务端） ===== */
+  function updateLoginBtn() {
+    const btn = document.getElementById('login-btn');
+    btn.textContent = getCookie() ? '已登录 ✓' : '登录';
+  }
+  let qrTimer = null;
+  function renderQr(url) {
+    const el = document.getElementById('qr');
+    if (window.qrcode) {
+      const qr = qrcode(0, 'L'); qr.addData(url); qr.make();
+      el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
+    } else {
+      el.innerHTML = '<p style="padding:8px;font-size:12px;word-break:break-all"><a href="' + url + '" target="_blank">' + url + '</a></p>';
+    }
+  }
+  async function openLogin() {
+    document.getElementById('login-modal').style.display = 'flex';
+    const r = await fetch('/login/qr/generate').then(x=>x.json());
+    if (!r.data || !r.data.unikey) { document.getElementById('qr-status').textContent = '生成二维码失败'; return; }
+    const unikey = r.data.unikey;
+    renderQr(r.data.qr_url);
+    document.getElementById('qr-status').textContent = '请用网易云 App 扫码';
+    if (qrTimer) clearInterval(qrTimer);
+    qrTimer = setInterval(async () => {
+      const c = await fetch('/login/qr/check?key=' + encodeURIComponent(unikey)).then(x=>x.json());
+      const code = c.data && c.data.code;
+      if (code === 803) {
+        clearInterval(qrTimer);
+        if (c.data.cookie) localStorage.setItem(COOKIE_KEY, c.data.cookie);
+        document.getElementById('qr-status').textContent = '登录成功！';
+        updateLoginBtn();
+        setTimeout(closeLogin, 800);
+      } else if (code === 800) {
+        clearInterval(qrTimer);
+        document.getElementById('qr-status').textContent = '二维码已过期，请重新打开';
+      } else if (code === 802) {
+        document.getElementById('qr-status').textContent = '已扫码，请在 App 确认';
+      }
+    }, 2000);
+  }
+  function closeLogin() {
+    if (qrTimer) clearInterval(qrTimer);
+    document.getElementById('login-modal').style.display = 'none';
+  }
+  function onLoginClick() {
+    if (getCookie()) { localStorage.removeItem(COOKIE_KEY); updateLoginBtn(); }
+    else openLogin();
+  }
+  updateLoginBtn();
 </script>
 </body>
 </html>
