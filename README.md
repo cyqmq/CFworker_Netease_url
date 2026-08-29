@@ -5,7 +5,7 @@
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?repository-url=https://github.com/cyqmq/CFworker_Netease_url)
 
-> 一键部署后还需：① 在 Workers 设置里 `wrangler secret put COOKIE`（VIP 音质）；② 用到 KV 时先 `wrangler kv namespace create NETEASE_KV` 并把 id 填进 `wrangler.toml`，再 `wrangler kv key put` 写入 `cookie_list`。
+> 一键部署后请按下方「部署 Checklist（速查）」配置：把 **Build command 改为 `./deploy.sh`**，并在 KV 写入 `cookie_list` / `api_token`。Cookie 与 Token 都用 KV 存储，不要用控制台变量（会被 git 部署清空）。
 
 ## 功能
 
@@ -36,8 +36,24 @@ https://deploy.workers.cloudflare.com/?repository-url=https://github.com/cyqmq/C
 ```bash
 npm i -g wrangler        # 或 pnpm add -g wrangler
 cd netease-worker
-wrangler deploy          # 如需 KV，先把 wrangler.toml 里 [[kv_namespaces]] 注释取消并填真实 id
+wrangler deploy          # 如需 KV（Cookie 池/缓存），直接跑 ./deploy.sh（自动建+绑+部署）
 ```
+
+## 部署 Checklist（速查）
+
+1. **部署代码**：点 README 顶部 Deploy 按钮连接 GitHub 仓库，或用本地 `wrangler deploy`。
+2. **改 Build command（关键）**：`Workers & Pages → 本项目 → Settings → Build → Build command` 改为 `./deploy.sh`（默认是 `wrangler deploy`），改完 Retry 一次部署。
+   - 作用：脚本自动创建/复用 KV 命名空间 `NETEASE_KV` 并**绑定到 Worker**。否则 KV 不绑定，`cookie_list` / `api_token` 都读不到。
+3. **填 Cookie（会员无损必填）**：在 KV `NETEASE_KV` 写键 `cookie_list` = `["MUSIC_U=xxxx; os=pc;"]`。
+   - 控制台变量 `COOKIE` 会被 git 部署清空，**不要用**。
+4. **开鉴权（推荐）**：在 KV `NETEASE_KV` 写键 `api_token` = 任意强随机串。外部调用需带它，同源页面免 token。
+5. **验证**：
+   - `GET /health` → `cookie_status: "valid"`
+   - 外部无 token 调 `/song` → `401`
+   - 带 `x-api-key: 你的token` 调 `/song` → `200` + 直链
+6. **（可选）自定义域名**：`Workers → 本项目 → 域名`，绑定你的域名（如 `yy.xn--ykq675h.cn`）。
+
+> 首次部署脚本会自动给缺失的 `cookie_list` / `api_token` 写入占位并提示，你再去 KV 改成真实值即可。
 
 ## 变量与 KV 配置
 
@@ -79,8 +95,8 @@ wrangler secret put COOKIE
   - **同源请求**（来自你自己的页面，即请求 `Origin`/`Referer` 的域名与 Worker 域名一致）→ 自动放行，前端页面正常用，**无需任何 token**。
   - **外部请求**（curl、其他网站调用等）→ 必须携带正确 Token，否则返回 `401`。
 
-- **设置方式**：Cloudflare 控制台 → `Settings` → `Variables and Secrets` → `Add` → 名称 `API_TOKEN`、值自定义一个强随机串、类型选 **Secret**。
-  - 若用 Workers Builds 自动部署把控制台变量清空了，可在 KV 命名空间 `NETEASE_KV` 里加一个键 **`api_token`**（值同上）作为兜底，Worker 会优先用环境变量、没有再读 KV。
+- **设置方式（推荐 KV，最稳）**：在 KV 命名空间 `NETEASE_KV` 加键 **`api_token`**，值为任意强随机串（纯文本，不要加引号/JSON）。Worker 每次请求读取，不受 git 部署清空。
+  - 兜底机制：Worker 优先读环境变量 `API_TOKEN`，没有再读 KV `api_token`。若你确实想用控制台 Secret `API_TOKEN`，注意 Workers Builds 的 `git push` 可能把它清空，不如直接放 KV。
 - **外部调用携带 Token 的三种方式**（任选其一）：
   - 请求头 `Authorization: Bearer <token>`
   - 请求头 `x-api-key: <token>`
