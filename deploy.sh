@@ -1,60 +1,30 @@
 #!/usr/bin/env bash
-# 一键部署：自动查找/创建名为 NETEASE_KV 的 KV 命名空间并绑定，再部署；为缺失的 KV 键写占位。
+# 一键部署：优先读取 Cloudflare 构建机密 KV_ID 注入 KV 绑定；否则若 wrangler.toml 已含 [[kv_namespaces]] 也行。
 # 用法：
-#   本地：  ./deploy.sh
-#   Cloudflare Workers Builds：把 Build command 设为 ./deploy.sh（原默认 npx wrangler deploy）
+#   本地：  export KV_ID=你的KV命名空间id && ./deploy.sh   （或 wrangler.toml 已含 [[kv_namespaces]]）
+#   Cloudflare Workers Builds：Build command 设为 ./deploy.sh，并在
+#     Worker → Settings → Variables and Secrets 添加 Secret：名称 KV_ID，值=你的 NETEASE_KV 命名空间 id
 set -uo pipefail
 cd "$(dirname "$0")"
-
-NS_TITLE="NETEASE_KV"
 BINDING="NETEASE_KV"
-W="npx wrangler"   # 与原构建命令保持一致
-
-echo "==> wrangler 版本：$($W --version 2>&1 || echo 'unknown')"
-echo "==> 查找/创建 KV 命名空间 '$NS_TITLE' ..."
-
-# wrangler 4.x 的 kv 子命令不支持 --json，改用文本解析提取 32 位 hex 的 namespace id
-ID=""
-RAW=$($W kv namespace list 2>&1) || echo "  (wrangler kv list 失败，详见下方错误)"
-if echo "$RAW" | head -c 200 | grep -qi 'permission\|unauthorized\|not found\|unknown argument'; then
-  echo "  wrangler kv list 返回："; echo "$RAW" | head -c 600
-else
-  ID=$(echo "$RAW" | grep -i "NETEASE_KV" | grep -oE '[0-9a-f]{32}' | head -1)
-fi
-
-if [ -z "$ID" ]; then
-  echo "    未找到，尝试创建 ..."
-  RAW2=$($W kv namespace create "$NS_TITLE" 2>&1) || echo "  (wrangler kv create 失败，详见下方错误)"
-  if echo "$RAW2" | head -c 200 | grep -qi 'permission\|unauthorized\|not found\|unknown argument'; then
-    echo "  wrangler kv create 返回："; echo "$RAW2" | head -c 600
-  else
-    ID=$(echo "$RAW2" | grep -oE '[0-9a-f]{32}' | head -1)
-  fi
-fi
-
-if [ -n "$ID" ]; then
-  echo "    KV id = $ID"
-  node -e '
-    const fs=require("fs");
-    let t=fs.readFileSync("wrangler.toml","utf8");
-    const block="[[kv_namespaces]]\nbinding = \"NETEASE_KV\"\nid = \"'"$ID"'\""\n";
-    if(t.includes("# [[kv_namespaces]]")){
-      t=t.replace(/# \[\[kv_namespaces\]\][\s\S]*?# id = .*/m, block);
-    } else if(!t.includes("[[kv_namespaces]]")){
-      t=t.replace(/\[assets\]/, block+"[assets]");
-    }
-    fs.writeFileSync(".wrangler-deploy.toml", t);
-  '
+W="npx wrangler"
+KV_ID="${KV_ID:-}"
+echo "==> wrangler 版本：$($W --version 2>&1 || echo unknown)"
+if [ -n "$KV_ID" ]; then
+  echo "==> 使用构建机密 KV_ID 注入 KV 绑定 ..."
+  cp wrangler.toml .wrangler-deploy.toml
+  sed -i '/kv_namespaces/d; /binding = "NETEASE_KV"/d; /# id = /d' .wrangler-deploy.toml
+  printf '[[kv_namespaces]]\nbinding = "NETEASE_KV"\nid = "%s"\n' "$KV_ID" >> .wrangler-deploy.toml
   echo "==> 部署（已绑定 KV，配置：.wrangler-deploy.toml）..."
   $W deploy --config .wrangler-deploy.toml
+elif grep -q '^\[\[kv_namespaces' wrangler.toml; then
+  echo "==> wrangler.toml 已含 KV 绑定，直接部署 ..."
+  $W deploy
 else
-  echo "    ⚠️ 未能获取/创建 KV 命名空间（权限/网络问题，错误见上）。将不使用 KV 部署。"
-  echo "==> 部署（不含 KV，配置：wrangler.toml）..."
+  echo "==> 未检测到 KV_ID 机密，且 wrangler.toml 无 KV 绑定 -> 不使用 KV 部署（worker 将以无 KV 上线）"
   $W deploy
 fi
-
-# 首次部署：为缺失的 KV 键写占位（容错）
-if [ -n "$ID" ]; then
+if [ -n "$KV_ID" ] || grep -q '^\[\[kv_namespaces' wrangler.toml; then
   echo "==> 检查 KV 配置占位 ..."
   if $W kv key get --binding "$BINDING" cookie_list >/dev/null 2>&1; then
     echo "    cookie_list 已存在，跳过"
@@ -62,7 +32,7 @@ if [ -n "$ID" ]; then
     if $W kv key put --binding "$BINDING" cookie_list '[]' >/dev/null 2>&1; then
       echo "    cookie_list 已写空占位 []，请在 KV 填入黑胶会员 Cookie（如 [\"MUSIC_U=xxxx; os=pc;\"]）"
     else
-      echo "    ⚠️ 无法写 cookie_list 占位，请手动在控制台 NETEASE_KV 添加"
+      echo "    ⚠️ 无法写 cookie_list 占位（构建凭证可能无 KV 写权限），请手动在控制台 NETEASE_KV 添加"
     fi
   fi
   if $W kv key get --binding "$BINDING" api_token >/dev/null 2>&1; then
