@@ -13,27 +13,22 @@ W="npx wrangler"   # 与原构建命令保持一致
 echo "==> wrangler 版本：$($W --version 2>&1 || echo 'unknown')"
 echo "==> 查找/创建 KV 命名空间 '$NS_TITLE' ..."
 
+# wrangler 4.x 的 kv 子命令不支持 --json，改用文本解析提取 32 位 hex 的 namespace id
 ID=""
-RAW=$($W kv namespace list --json 2>&1) || echo "  (wrangler kv list 失败，详见下方错误)"
-if echo "$RAW" | head -c 200 | grep -qi 'error\|permission\|unauthorized\|not found'; then
+RAW=$($W kv namespace list 2>&1) || echo "  (wrangler kv list 失败，详见下方错误)"
+if echo "$RAW" | head -c 200 | grep -qi 'permission\|unauthorized\|not found\|unknown argument'; then
   echo "  wrangler kv list 返回："; echo "$RAW" | head -c 600
 else
-  ID=$(echo "$RAW" | node -e '
-    let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-      let id="";
-      try{const a=JSON.parse(s);const f=a.find(x=>x.title==="NETEASE_KV");if(f)id=f.id;}catch(e){}
-      console.log(id);
-    });
-  ')
+  ID=$(echo "$RAW" | grep -i "NETEASE_KV" | grep -oE '[0-9a-f]{32}' | head -1)
 fi
 
 if [ -z "$ID" ]; then
   echo "    未找到，尝试创建 ..."
-  RAW2=$($W kv namespace create "$NS_TITLE" --json 2>&1) || echo "  (wrangler kv create 失败，详见下方错误)"
-  if echo "$RAW2" | head -c 200 | grep -qi 'error\|permission\|unauthorized\|not found'; then
+  RAW2=$($W kv namespace create "$NS_TITLE" 2>&1) || echo "  (wrangler kv create 失败，详见下方错误)"
+  if echo "$RAW2" | head -c 200 | grep -qi 'permission\|unauthorized\|not found\|unknown argument'; then
     echo "  wrangler kv create 返回："; echo "$RAW2" | head -c 600
   else
-    ID=$(echo "$RAW2" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).id)}catch(e){}});')
+    ID=$(echo "$RAW2" | grep -oE '[0-9a-f]{32}' | head -1)
   fi
 fi
 
