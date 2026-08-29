@@ -390,6 +390,31 @@ function err(message, status = 400) {
   return json({ status, success: false, message }, status);
 }
 
+/* ============================ API 鉴权 ============================ */
+
+/* 取 API Token：优先环境变量 API_TOKEN，其次 KV 键 api_token（Workers Builds 可能清空控制台变量，KV 更稳） */
+async function resolveApiToken(kv, env) {
+  const fromEnv = (env.API_TOKEN || '').trim();
+  if (fromEnv) return fromEnv;
+  if (kv) {
+    try { const v = await kv.get('api_token'); if (v) return v.trim(); } catch (_) {}
+  }
+  return '';
+}
+
+function checkAuth(request, url, apiToken) {
+  const p = url.pathname.toLowerCase();
+  if (p === '/health' || p === '/api/info') return null; // 放行健康检查与信息接口
+  if (!apiToken) return null; // 未配置则关闭鉴权（兼容调试/自用）
+  const auth = request.headers.get('Authorization') || '';
+  let provided = '';
+  if (auth.toLowerCase().startsWith('bearer ')) provided = auth.slice(7).trim();
+  if (!provided) provided = request.headers.get('x-api-key') || '';
+  if (!provided) provided = url.searchParams.get('token') || '';
+  if (provided && provided === apiToken) return null;
+  return err('未授权：缺少或错误的 API Token', 401);
+}
+
 /* ============================ 路由 ============================ */
 
 async function handleSong(data, cookieStr, kv) {
@@ -612,6 +637,11 @@ export default {
         supported_qualities: VALID_LEVELS,
       });
     }
+
+    // API 鉴权（API_TOKEN 留空或 KV 无 api_token 则关闭）
+    const apiToken = await resolveApiToken(kv, env);
+    const authErr = checkAuth(request, url, apiToken);
+    if (authErr) return authErr;
 
     const p = path.toLowerCase();
     if (p === '/song' || p === '/song_v1') return handleSong(data, cookieStr, kv);

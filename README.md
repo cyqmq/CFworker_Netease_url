@@ -69,6 +69,26 @@ wrangler secret put COOKIE
 
 > 不配置 COOKIE 也能解析标准 / 极高音质（视账号限制），但无损 / Hi-Res / SVIP 需要黑胶会员 Cookie。
 
+### API 鉴权（API_TOKEN，防滥用）
+
+新增一个变量 **`API_TOKEN`**，所有解析接口都必须携带正确 Token，否则返回 `401`。`/health`、`/api/info` 免鉴权。
+
+- **设置方式**：Cloudflare 控制台 → `Settings` → `Variables and Secrets` → `Add` → 名称 `API_TOKEN`、值自定义一个强随机串、类型选 **Secret**。
+  - 若用 Workers Builds 自动部署把控制台变量清空了，可在 KV 命名空间 `NETEASE_KV` 里加一个键 **`api_token`**（值同上）作为兜底，Worker 会优先用环境变量、没有再读 KV。
+  - **留空 = 关闭鉴权**（兼容调试/自用，但不防滥用）。
+- **携带 Token 的三种方式**（任选其一）：
+  - 请求头 `Authorization: Bearer <token>`
+  - 请求头 `x-api-key: <token>`
+  - 查询参数 `?token=<token>`（适合分享链接 / 直接下载跳转）
+
+```bash
+# 带 Token 调用示例
+curl -H "x-api-key: YOUR_TOKEN" "https://你的worker/song?id=195251&level=exhigh&type=url"
+curl "https://你的worker/song?id=195251&level=exhigh&type=url&token=YOUR_TOKEN"
+```
+
+> Web 页面已内置 Token 输入框（自动记忆到 localStorage），所有请求会自动带上。
+
 ### KV（可选，推荐：Cookie 池 + 直链缓存）
 
 > **绑定名是固定的**：代码中用 `env.NETEASE_KV` 读取，所以 `wrangler.toml` 里的 `binding` 必须叫 `NETEASE_KV`（改名会读不到）。KV 命名空间的 **title 也建议叫 `NETEASE_KV`**（脚本靠 title 查找/复用）。命名空间本身的 **id 每个账号不同**，由下面的脚本/命令自动生成并填入，无需手填。
