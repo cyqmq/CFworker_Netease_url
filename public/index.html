@@ -111,7 +111,7 @@
         <div id="admin-msg" class="hint"></div>
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">
           <thead><tr style="color:var(--muted);text-align:left">
-            <th style="padding:6px">#</th><th>Cookie</th><th>状态</th><th>账号</th><th>VIP</th><th>使用</th><th>流量</th><th>检查</th><th></th>
+            <th style="padding:6px">#</th><th>Cookie</th><th>状态</th><th>听歌等级</th><th>VIP</th><th>账号ID</th><th>使用</th><th>流量</th><th>检查</th><th></th>
           </tr></thead>
           <tbody id="admin-cookie-rows"></tbody>
         </table>
@@ -308,12 +308,15 @@
       card('URL 缓存', s.cache_count + ' 条') + card('Cookie 数', r.data.cookies.length);
     const rows = r.data.cookies.map(c => {
       const last = c.lastCheck ? new Date(c.lastCheck).toLocaleString() : '-';
+      const lvl = (c.level != null) ? ('Lv.' + c.level) : '-';
+      const vip = c.valid ? (c.vipName || (c.vip ? 'VIP' : '普通')) : '-';
       return `<tr style="border-top:1px solid var(--border)">
         <td style="padding:6px">${c.index}</td>
         <td style="font-family:monospace">${c.masked}</td>
         <td>${c.valid ? '<span style="color:#5fce6b">有效</span>' : '<span style="color:#ff6b6b">失效</span>'}</td>
-        <td>${c.userName || '-'}</td>
-        <td>${c.vipLabel || '-'}</td>
+        <td>${lvl}</td>
+        <td>${vip}</td>
+        <td>${c.userId || '-'}</td>
         <td>${c.used || 0}</td>
         <td>${fmtSize(c.bytes)}</td>
         <td style="font-size:11px;color:var(--muted)">${last}</td>

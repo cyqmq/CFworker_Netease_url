@@ -663,12 +663,6 @@ async function handleDownload(data, cookieStr, request, kv) {
 function maskCookie(c) {
   return String(c).replace(/MUSIC_U=([0-9a-fA-F]+)/, (_, p) => 'MUSIC_U=' + p.slice(0, 6) + '…' + p.slice(-4));
 }
-function vipLabel(t) {
-  if (t === 11) return '黑胶VIP';
-  if (t === 10 || t === 1) return '音乐包';
-  if (t === 0) return '普通用户';
-  return '类型' + t;
-}
 
 /* 流量/用量统计：按 cookie 哈希记录请求数与解析流量（歌曲体积） */
 async function recordUsage(kv, cookieStr, bytes) {
@@ -686,26 +680,39 @@ async function recordUsage(kv, cookieStr, bytes) {
   } catch (_) {}
 }
 
-/* 校验某个 Cookie 是否有效，并取回账号昵称 / VIP 类型与等级 */
+/* 校验某个 Cookie：是否有效、听歌等级、以及是否具备 VIP(无损/HiRes) 能力 */
+const VIP_PROBE_IDS = ['210049', '5257138'];
+async function probeVip(cookieStr) {
+  for (const id of VIP_PROBE_IDS) {
+    try {
+      const p1 = await getSongUrl(id, 'lossless', cookieStr, null);
+      const d1 = p1?.data?.[0];
+      if (d1 && d1.url) {
+        const hi = ['hires', 'jymaster', 'dolby', 'sky'].includes(d1.level);
+        return { vip: true, vipName: hi ? 'VIP·HiRes' : 'VIP·无损' };
+      }
+      const p2 = await getSongUrl(id, 'hires', cookieStr, null);
+      const d2 = p2?.data?.[0];
+      if (d2 && d2.url) return { vip: true, vipName: 'VIP·HiRes' };
+    } catch (_) { /* try next */ }
+  }
+  return { vip: false, vipName: '普通/受限' };
+}
 async function checkCookie(cookieStr) {
-  const info = { valid: false };
+  const info = { valid: false, level: null, userId: '', vip: false, vipName: '' };
   let r = null;
   try { r = await eapiRequest('https://music.163.com/eapi/user/level', {}, cookieStr); }
   catch (e) { info.msg = String(e); }
-  if (r) {
-    info.code = r.code;
-    if (r.code === 200) {
-      info.valid = true;
-      info.raw = JSON.stringify(r).slice(0, 700);
-      const d = r.data || r;
-      info.userName = (d.profile && d.profile.nickname) || d.nickname || (d.account && d.account.userName) || '';
-      info.userId = d.userId || (d.account && d.account.userId) || '';
-      info.vipType = d.vipType ?? (d.account && d.account.vipType) ?? null;
-      info.vipLevel = d.vipLevel ?? (d.account && d.account.vipLevel) ?? null;
-      info.level = d.level ?? null;
-    } else {
-      info.msg = (r.msg || r.message) || 'code ' + r.code;
-    }
+  if (r && r.code === 200) {
+    info.valid = true;
+    const d = r.data || r;
+    info.userId = d.userId || (d.account && d.account.userId) || '';
+    info.level = d.level ?? null;
+    const vp = await probeVip(cookieStr);
+    info.vip = vp.vip;
+    info.vipName = vp.vipName;
+  } else if (r) {
+    info.msg = (r.msg || r.message) || 'code ' + r.code;
   }
   return info;
 }
@@ -756,11 +763,9 @@ async function handleAdminInfo(kv) {
     const sm = (stats.by_cookie && stats.by_cookie[hash]) || {};
     return {
       index: i, masked: maskCookie(c), valid: !!m.valid,
-      userName: m.userName || '',       vipType: (m.vipType !== undefined) ? m.vipType : null,
-      vipLevel: (m.vipLevel !== undefined) ? m.vipLevel : null,
-      vipLabel: (m.vipType != null) ? vipLabel(m.vipType) : '',
-      raw: m.raw || '', lastCheck: m.lastCheck || 0,
-      used: sm.used || 0, bytes: sm.bytes || 0,
+      level: (m.level !== undefined) ? m.level : null,
+      userId: m.userId || '', vip: !!m.vip, vipName: m.vipName || '',
+      lastCheck: m.lastCheck || 0, used: sm.used || 0, bytes: sm.bytes || 0,
     };
   });
   return ok({
@@ -777,9 +782,8 @@ async function handleAdminCookieCheck(kv) {
     const hash = md5hex(buildCookie(c));
     const info = await checkCookie(buildCookie(c));
     meta[hash] = {
-      valid: info.valid, userName: info.userName, userId: info.userId,
-      vipType: info.vipType, vipLevel: info.vipLevel, raw: info.raw || '',
-      lastCheck: Date.now(), msg: info.msg || '',
+      valid: info.valid, level: info.level ?? null, userId: info.userId || '',
+      vip: !!info.vip, vipName: info.vipName || '', lastCheck: Date.now(), msg: info.msg || '',
     };
   }
   await kv.put('cookie_meta', JSON.stringify(meta));
