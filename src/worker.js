@@ -494,6 +494,9 @@ function checkAuth(request, url, apiToken) {
 /* ============================ 路由 ============================ */
 
 async function handleSong(data, cookieStr, kv) {
+  if (!cookieStr || cookieStr === buildCookie('')) {
+    return err('未配置可用的 Cookie：请在管理后台「添加 Cookie / 扫码添加」加入至少一个网易云账号 Cookie（免费账号可听标准/极高，无损/HiRes 需会员）', 400);
+  }
   const songIds = data.ids || data.id || data.url;
   const url = data.url;
   const level = data.level || 'lossless';
@@ -624,6 +627,9 @@ async function handleAlbum(data, cookieStr) {
 }
 
 async function handleDownload(data, cookieStr, request, kv) {
+  if (!cookieStr || cookieStr === buildCookie('')) {
+    return err('未配置可用的 Cookie：请在管理后台「添加 Cookie / 扫码添加」加入至少一个网易云账号 Cookie（免费账号可听标准/极高，无损/HiRes 需会员）', 400);
+  }
   const musicId = data.id || data.url;
   const quality = data.quality || 'lossless';
   const format = data.format || 'file';
