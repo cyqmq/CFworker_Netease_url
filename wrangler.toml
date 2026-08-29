@@ -18,3 +18,4 @@ binding = "NETEASE_KV"
 
 [assets]
 directory = "public"
+run_worker_first = true
