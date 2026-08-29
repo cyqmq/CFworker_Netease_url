@@ -13,6 +13,7 @@
 - 多音质：standard / exhigh / lossless / hires / sky / jyeffect / jymaster / dolby
 - 音乐直链获取与代理下载（/download 直接回源流式返回）
 - 内置 Web 界面（public/index.html）
+- 客户端扫码登录（自带 Cookie，无需服务器 Cookie 池）
 
 ## 部署
 
@@ -165,6 +166,19 @@ Base URL 为你的 Worker 地址。支持 GET（query）与 POST（JSON 或 form
 所有接口支持 CORS（`Access-Control-Allow-Origin: *`）。
 
 也可通过 `?cookie=` 或请求头 `x-ner-cookie` 临时覆盖服务端 Cookie。
+
+## 客户端扫码登录（自带 Cookie，无需服务器 Cookie 池）
+
+Web 界面右上角「扫码登录」按钮，用网易云 App 扫码即可拿到你自己的 `MUSIC_U` Cookie，仅保存在浏览器 `localStorage`，并自动通过 `x-ner-cookie` 请求头 / `?cookie=` 用于解析，服务器不留存。适合不想往 KV 填 Cookie、又想要会员音质的场景。
+
+接口（均免 Token 鉴权）：
+
+| 接口 | 方法 | 参数 | 说明 |
+|------|------|------|------|
+| `/login/qr/generate` | GET | - | 生成二维码 key，返回 `data.unikey` 与 `data.qr_url` |
+| `/login/qr/check` | POST | `key`（generate 返回的 unikey） | 轮询：`801` 等待扫码 / `802` 待确认 / `803` 登录成功（返回 `data.cookie`） |
+
+> 扫码登录使用网易 eapi 协议（与服务器解析同一套加密），`interface3` 域名在 CF 被墙，已改用 `music.163.com` 主机。
 
 ## 说明
 
