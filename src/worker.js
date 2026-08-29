@@ -690,23 +690,21 @@ async function recordUsage(kv, cookieStr, bytes) {
 async function checkCookie(cookieStr) {
   const info = { valid: false };
   let r = null;
-  try { r = await eapiRequest('https://music.163.com/eapi/user/account/get', {}, cookieStr); }
+  try { r = await eapiRequest('https://music.163.com/eapi/user/level', {}, cookieStr); }
   catch (e) { info.msg = String(e); }
-  if (r && r.code === 200) {
-    info.valid = true;
+  if (r) {
     info.code = r.code;
-    const acc = r.account || (r.data && r.data.account) || {};
-    const prof = r.profile || (r.data && r.data.profile) || {};
-    const vip = r.data || {};
-    info.userName = prof.nickname || acc.userName || '';
-    info.userId = acc.userId || (prof && prof.userId) || '';
-    info.vipType = (acc.vipType !== undefined) ? acc.vipType
-      : ((vip.vipType !== undefined) ? vip.vipType : null);
-    info.vipLevel = (acc.vipLevel !== undefined) ? acc.vipLevel
-      : ((vip.vipLevel !== undefined) ? vip.vipLevel : null);
-  } else if (r) {
-    info.msg = (r.msg || r.message) || 'code ' + r.code;
-    info.code = r.code;
+    if (r.code === 200) {
+      info.valid = true;
+      const d = r.data || r;
+      info.userName = (d.profile && d.profile.nickname) || d.nickname || (d.account && d.account.userName) || '';
+      info.userId = d.userId || (d.account && d.account.userId) || '';
+      info.vipType = d.vipType ?? (d.account && d.account.vipType) ?? null;
+      info.vipLevel = d.vipLevel ?? (d.account && d.account.vipLevel) ?? null;
+      info.level = d.level ?? null;
+    } else {
+      info.msg = (r.msg || r.message) || 'code ' + r.code;
+    }
   }
   return info;
 }
