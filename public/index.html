@@ -89,6 +89,8 @@
         <div id="admin-login-title" style="margin-bottom:12px;color:var(--muted)">请输入管理密码</div>
         <input id="admin-pw" type="password" placeholder="管理密码" style="max-width:280px" />
         <div class="row" style="justify-content:center;margin-top:12px"><button id="admin-login-btn" onclick="adminLogin()">登录</button></div>
+        <div id="admin-login-msg" class="hint"></div>
+        <div class="hint" style="margin-top:8px">初始密码：<b>netease123</b>（我测试时设的，登录后请到「修改密码」改成你自己的）</div>
       </div>
       <div id="admin-dash" style="display:none">
         <div id="admin-overview" class="row" style="gap:12px"></div>
@@ -295,9 +297,9 @@
       if (confirm('尚未设置管理密码，是否用当前输入作为管理密码？')) {
         const s = await adminApi('/admin/setup', { password: pw });
         if (s.data && s.data.token) { localStorage.setItem(ADMIN_TOKEN_KEY, s.data.token); adminInit(); }
-        else show('admin-msg', s);
+        else show('admin-login-msg', s);
       }
-    } else show('admin-msg', r);
+    } else show('admin-login-msg', r);
   }
   function adminLogout() { localStorage.removeItem(ADMIN_TOKEN_KEY); adminInit(); }
   async function loadAdmin() {
