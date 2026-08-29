@@ -859,17 +859,6 @@ export default {
       }
     }
 
-    // 先尝试静态资源（index.html / qrcode.min.js 等），命中则直接返回并禁用缓存；未命中再走 API
-    try {
-      const assetResp = await env.ASSETS.fetch(request);
-      if (assetResp && assetResp.status !== 404) {
-        return new Response(assetResp.body, {
-          status: assetResp.status,
-          headers: { ...assetResp.headers, 'Cache-Control': 'no-store' },
-        });
-      }
-    } catch (_) {}
-
     if (path === '/health') {
       return ok({
         service: 'running', cookie_status: cookie ? 'valid' : 'invalid',
@@ -882,13 +871,6 @@ export default {
         endpoints: { '/health': '健康检查', '/song': '单曲解析', '/search': '搜索', '/playlist': '歌单', '/album': '专辑', '/download': '下载/解析' },
         supported_qualities: VALID_LEVELS,
       });
-    }
-
-    if (p === '/__debug') {
-      const info = { hasAssets: !!env.ASSETS };
-      try { const r = await env.ASSETS.fetch(request); info.status = r.status; info.head = (await r.text()).slice(0, 60); }
-      catch (e) { info.err = String(e); }
-      return ok(info);
     }
 
     // 管理后台（独立鉴权，绕过 API_TOKEN）

@@ -255,10 +255,28 @@
     qrTimer = setInterval(async () => {
       const c = await fetch('/login/qr/check?key=' + encodeURIComponent(unikey)).then(x=>x.json());
       const code = c.data && c.data.code;
-      if (code === 803) {
+       if (code === 803) {
+         clearInterval(qrTimer);
+         if (c.data.cookie) localStorage.setItem(COOKIE_KEY, c.data.cookie);
+         document.getElementById('qr-status').textContent = '登录成功！';
+         updateLoginBtn();
+         setTimeout(closeLogin, 800);
+       } else if (code === 800) {
         clearInterval(qrTimer);
-        if (c.data.cookie) localStorage.setItem(COOKIE_KEY, c.data.cookie);
-        document.getElementById('qr-status').textContent = '登录成功！';
+        document.getElementById('qr-status').textContent = '二维码已过期，请重新打开';
+      } else if (code === 802) {
+        document.getElementById('qr-status').textContent = '已扫码，请在 App 确认';
+      }
+    }, 2000);
+  }
+  function closeLogin() {
+    if (qrTimer) clearInterval(qrTimer);
+    document.getElementById('login-modal').style.display = 'none';
+  }
+  function onLoginClick() {
+    if (getCookie()) { localStorage.removeItem(COOKIE_KEY); updateLoginBtn(); }
+    else openLogin();
+  }
   updateLoginBtn();
 
   /* ===== 管理后台（密码存于 KV admin_password，登录后 token 存本机） ===== */
@@ -343,25 +361,6 @@
     const r = await adminApi('/admin/password', { old: o, password: n }, adminToken());
     show('admin-msg', r);
   }
-
-        setTimeout(closeLogin, 800);
-      } else if (code === 800) {
-        clearInterval(qrTimer);
-        document.getElementById('qr-status').textContent = '二维码已过期，请重新打开';
-      } else if (code === 802) {
-        document.getElementById('qr-status').textContent = '已扫码，请在 App 确认';
-      }
-    }, 2000);
-  }
-  function closeLogin() {
-    if (qrTimer) clearInterval(qrTimer);
-    document.getElementById('login-modal').style.display = 'none';
-  }
-  function onLoginClick() {
-    if (getCookie()) { localStorage.removeItem(COOKIE_KEY); updateLoginBtn(); }
-    else openLogin();
-  }
-  updateLoginBtn();
 </script>
 </body>
 </html>
