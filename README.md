@@ -73,8 +73,8 @@ MUSIC_U=xxxx; os=pc; appver=8.9.70;
   - value：`["MUSIC_U=xxxx; os=pc;"]`（数组里可放多个轮询）
 - 或本地：`wrangler kv key put --binding NETEASE_KV cookie_list '["MUSIC_U=xxxx; os=pc;"]'`
 
-**方式二（Workers Builds 环境变量）**：`Settings` → `Variables and Secrets` → `Add` → 名称 `COOKIE`、值填 Cookie 字符串、类型选 **Secret**。
-> ⚠️ 坑：通过 GitHub 自动部署（Workers Builds）时，每次 `git push` 可能会把控制台里设的 `COOKIE` 变量重置为空。若发现 `/health` 显示 `cookie_status: invalid`，优先改用上面的 **KV 方式**。
+**方式二（Workers Builds 环境变量，不推荐）**：`Settings` → `Variables and Secrets` → `Add` → 名称 `COOKIE`、值填 Cookie 字符串、类型选 **Secret**。
+> ⚠️ 坑：通过 GitHub 自动部署（Workers Builds）时，每次 `git push` **都会把控制台里设的 `COOKIE` 变量重置掉**。所以不要用这种方式，优先用上面的 **KV 方式**。
 
 **方式三（本地 wrangler）**：
 
@@ -96,7 +96,7 @@ wrangler secret put COOKIE
   - **外部请求**（curl、其他网站调用等）→ 必须携带正确 Token，否则返回 `401`。
 
 - **设置方式（推荐 KV，最稳）**：在 KV 命名空间 `NETEASE_KV` 加键 **`api_token`**，值为任意强随机串（纯文本，不要加引号/JSON）。Worker 每次请求读取，不受 git 部署清空。
-  - 兜底机制：Worker 优先读环境变量 `API_TOKEN`，没有再读 KV `api_token`。若你确实想用控制台 Secret `API_TOKEN`，注意 Workers Builds 的 `git push` 可能把它清空，不如直接放 KV。
+  - 兜底机制：Worker 优先读环境变量 `API_TOKEN`，没有再读 KV `api_token`。若你确实想用控制台 Secret `API_TOKEN`，注意 Workers Builds 的 `git push` **每次都会把它清空**，不如直接放 KV。
 - **外部调用携带 Token 的三种方式**（任选其一）：
   - 请求头 `Authorization: Bearer <token>`
   - 请求头 `x-api-key: <token>`
@@ -119,13 +119,14 @@ KV 做两件事：
 
 **无需手动填 id（fork 安全）**：`wrangler.toml` 里的 KV 绑定**故意不写 id**。部署时 wrangler（4.45+）会自动在你的账号下创建 `NETEASE_KV` 命名空间并绑定——因为仓库里没有写死任何账号相关的 id，别人 **fork 后部署会得到他们自己的 KV，不会与你冲突**。
 
-- 想复用**已存在**的 KV（例如里面已经填好 `cookie_list` / `api_token`）：在 Builds 的 `Settings → Variables and Secrets` 加一个 **Secret**，名称 `KV_ID`，值=那个命名空间的 id。`./deploy.sh` 会把它注入后再部署（保留其中数据）。
-- 不设置 `KV_ID`：每次部署自动新建一个空 KV（首次需自己在控制台往里写 `cookie_list` / `api_token`）。
+- ⚠️ **不要用 Runtime variables / secrets 存任何持久数据**：Workers Builds 每次 `git push` 部署都会把控制台手动加的 Secret / Variable **重置掉**。所以 Cookie、Token、以及 KV 命名空间 id 都**不要**依赖运行时变量。
+- 正因为如此，本项目**只用 KV 存数据**：把 `cookie_list` / `api_token` 写进 KV 即可，它们跟着 KV 命名空间走，部署不会清掉。命名空间本身由 wrangler 自动创建并绑定，仓库里不含任何 id，**fork 安全**。
+- （可选）想复用**已存在**的 KV（里面已填好 `cookie_list` / `api_token`）：在 Builds 的 **「构建过程使用的变量/机密」** 里加 `KV_ID` = 该命名空间 id（注意必须是**构建作用域**，不是运行时；运行时变量会被部署重置）。`./deploy.sh` 会把它注入并绑定；不设置则自动新建一个空 KV。
 
 **最简启用（推荐）**：把 Build command 设为 `./deploy.sh`，`git push` 即自动部署（并自动建/绑 KV），无需手动操作。
 
 ```bash
-./deploy.sh          # 未设 KV_ID 时由 wrangler 自动创建 KV；设了 KV_ID 则复用指定 KV
+./deploy.sh          # wrangler 自动创建/复用并绑定 KV（不依赖任何构建 Secret）
 ```
 
 写入 / 查看 / 清空 Cookie 池：
