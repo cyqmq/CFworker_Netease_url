@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# 一键部署：优先读取 Cloudflare 构建机密 KV_ID 注入 KV 绑定；否则若 wrangler.toml 已含 [[kv_namespaces]] 也行。
+# 一键部署：
+#   - 若设置了构建机密 KV_ID，则把它注入 wrangler.toml 的 KV 绑定（复用已有 KV，保留其中数据）；
+#   - 若未设置，则直接用 wrangler.toml 中“无 id 的 KV 绑定”，由 wrangler 自动创建并绑定（fork 安全）。
 # 用法：
-#   本地：  export KV_ID=你的KV命名空间id && ./deploy.sh   （或 wrangler.toml 已含 [[kv_namespaces]]）
-#   Cloudflare Workers Builds：Build command 设为 ./deploy.sh，并在
-#     Worker → Settings → Variables and Secrets 添加 Secret：名称 KV_ID，值=你的 NETEASE_KV 命名空间 id
+#   本地：  export KV_ID=你的KV命名空间id && ./deploy.sh   （KV_ID 可选）
+#   Cloudflare Workers Builds：Build command 设为 ./deploy.sh；
+#           可选在 Worker → Settings → Variables and Secrets 添加 Secret：名称 KV_ID，值=你的 KV 命名空间 id
+# 说明：KV 命名空间 id 不在仓库中，fork 不会冲突；fork 者不设置 KV_ID 时会自动新建自己的 KV。
 set -uo pipefail
 cd "$(dirname "$0")"
 BINDING="NETEASE_KV"
@@ -17,32 +20,29 @@ if [ -n "$KV_ID" ]; then
   printf '[[kv_namespaces]]\nbinding = "NETEASE_KV"\nid = "%s"\n' "$KV_ID" >> .wrangler-deploy.toml
   echo "==> 部署（已绑定 KV，配置：.wrangler-deploy.toml）..."
   $W deploy --config .wrangler-deploy.toml
-elif grep -q '^\[\[kv_namespaces' wrangler.toml; then
-  echo "==> wrangler.toml 已含 KV 绑定，直接部署 ..."
-  $W deploy
+  CFG=".wrangler-deploy.toml"
 else
-  echo "==> 未检测到 KV_ID 机密，且 wrangler.toml 无 KV 绑定 -> 不使用 KV 部署（worker 将以无 KV 上线）"
+  echo "==> 未设置 KV_ID：wrangler 将自动创建并绑定 KV 命名空间（fork 安全）..."
   $W deploy
+  CFG="wrangler.toml"
 fi
-if [ -n "$KV_ID" ] || grep -q '^\[\[kv_namespaces' wrangler.toml; then
-  echo "==> 检查 KV 配置占位 ..."
-  if $W kv key get --binding "$BINDING" cookie_list >/dev/null 2>&1; then
-    echo "    cookie_list 已存在，跳过"
+echo "==> 检查 KV 配置占位（最佳努力）..."
+if $W kv key get --binding "$BINDING" cookie_list --config "$CFG" >/dev/null 2>&1; then
+  echo "    cookie_list 已存在，跳过"
+else
+  if $W kv key put --binding "$BINDING" cookie_list '[]' --config "$CFG" >/dev/null 2>&1; then
+    echo "    cookie_list 已写空占位 []，请在 KV 填入黑胶会员 Cookie（如 [\"MUSIC_U=xxxx; os=pc;\"]）"
   else
-    if $W kv key put --binding "$BINDING" cookie_list '[]' >/dev/null 2>&1; then
-      echo "    cookie_list 已写空占位 []，请在 KV 填入黑胶会员 Cookie（如 [\"MUSIC_U=xxxx; os=pc;\"]）"
-    else
-      echo "    ⚠️ 无法写 cookie_list 占位（构建凭证可能无 KV 写权限），请手动在控制台 NETEASE_KV 添加"
-    fi
+    echo "    ⚠️ 无法写入 cookie_list（可稍后在控制台 NETEASE_KV 手动添加）"
   fi
-  if $W kv key get --binding "$BINDING" api_token >/dev/null 2>&1; then
-    echo "    api_token 已存在，跳过"
+fi
+if $W kv key get --binding "$BINDING" api_token --config "$CFG" >/dev/null 2>&1; then
+  echo "    api_token 已存在，跳过"
+else
+  if $W kv key put --binding "$BINDING" api_token 'CHANGE_ME_API_TOKEN' --config "$CFG" >/dev/null 2>&1; then
+    echo "    api_token 已写占位 CHANGE_ME_API_TOKEN，请改为你自己的强随机串"
   else
-    if $W kv key put --binding "$BINDING" api_token 'CHANGE_ME_API_TOKEN' >/dev/null 2>&1; then
-      echo "    api_token 已写占位 CHANGE_ME_API_TOKEN，请改为你自己的强随机串"
-    else
-      echo "    ⚠️ 无法写 api_token 占位，请手动在控制台 NETEASE_KV 添加（不填则鉴权关闭）"
-    fi
+    echo "    ⚠️ 无法写入 api_token（可稍后在控制台 NETEASE_KV 手动添加；不填则鉴权关闭）"
   fi
 fi
 echo "==> 完成。"

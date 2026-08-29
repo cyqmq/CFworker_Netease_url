@@ -109,31 +109,23 @@ curl "https://你的worker/song?id=195251&level=exhigh&type=url&token=YOUR_TOKEN
 # 无 token 的外部请求 → 401
 ```
 
-### KV（可选，推荐：Cookie 池 + 直链缓存）
+### KV（推荐：Cookie 池 + 直链缓存）
 
-> **绑定名是固定的**：代码中用 `env.NETEASE_KV` 读取，所以 `wrangler.toml` 里的 `binding` 必须叫 `NETEASE_KV`（改名会读不到）。KV 命名空间的 **title 也建议叫 `NETEASE_KV`**（脚本靠 title 查找/复用）。命名空间本身的 **id 每个账号不同**，由下面的脚本/命令自动生成并填入，无需手填。
+> **绑定名是固定的**：代码中用 `env.NETEASE_KV` 读取，所以 `wrangler.toml` 里的 `binding` 必须叫 `NETEASE_KV`（改名会读不到）。
 
 KV 做两件事：
 1. **Cookie 池（轮换，缓解限流）**：多个会员 Cookie 存到 KV 键 `cookie_list`（JSON 数组），每次请求轮询取一个，分散请求避免 `-110` 限流。
 2. **直链缓存**：歌曲直链按 `url:{id}:{level}` 缓存，TTL 1100s（网易直链约 20 分钟过期）。
 
-**最简启用（推荐）：用 `deploy.sh` 自动建 + 绑 + 部署**
+**无需手动填 id（fork 安全）**：`wrangler.toml` 里的 KV 绑定**故意不写 id**。部署时 wrangler（4.45+）会自动在你的账号下创建 `NETEASE_KV` 命名空间并绑定——因为仓库里没有写死任何账号相关的 id，别人 **fork 后部署会得到他们自己的 KV，不会与你冲突**。
+
+- 想复用**已存在**的 KV（例如里面已经填好 `cookie_list` / `api_token`）：在 Builds 的 `Settings → Variables and Secrets` 加一个 **Secret**，名称 `KV_ID`，值=那个命名空间的 id。`./deploy.sh` 会把它注入后再部署（保留其中数据）。
+- 不设置 `KV_ID`：每次部署自动新建一个空 KV（首次需自己在控制台往里写 `cookie_list` / `api_token`）。
+
+**最简启用（推荐）**：把 Build command 设为 `./deploy.sh`，`git push` 即自动部署（并自动建/绑 KV），无需手动操作。
 
 ```bash
-./deploy.sh          # 自动创建/复用 NETEASE_KV，把真实 id 注入配置后 wrangler deploy
-```
-
-Cloudflare Workers Builds（Deploy 按钮连 GitHub 后）：把该项目的 **Build command** 设为 `./deploy.sh`（默认是 `wrangler deploy`），之后每次 `git push` 都会自动创建/绑定 KV 并部署，无需手动操作。
-
-**手动启用（Workers Builds）步骤**：
-1. Cloudflare 控制台 → `Workers & Pages` → `KV` → `Create a namespace`，命名为 `NETEASE_KV`，复制其 ID。
-2. 编辑 `wrangler.toml`，取消 `[[kv_namespaces]]` 注释并把 `id` 换成真实值，`git push` 触发重建。
-3. 写入 Cookie 池（命令见下，也可在控制台 KV 页手动添加键 `cookie_list`）。
-
-**手动启用（本地 wrangler）**：
-
-```bash
-wrangler kv namespace create NETEASE_KV   # 拿到 id，填进 wrangler.toml（或用 ./deploy.sh）
+./deploy.sh          # 未设 KV_ID 时由 wrangler 自动创建 KV；设了 KV_ID 则复用指定 KV
 ```
 
 写入 / 查看 / 清空 Cookie 池：

@@ -9,11 +9,12 @@ compatibility_date = "2024-09-23"
 
 # KV 存储：Cookie 池 + 直链缓存（可选）
 # 绑定名固定为 NETEASE_KV（代码中用 env.NETEASE_KV 读取，改名会读不到）。
-# 一键启用：直接运行 ./deploy.sh（会自动创建/复用命名空间并把真实 id 注入后部署）。
-# 手动启用：取消下面注释并把 id 换成真实值，再 wrangler deploy。
-# [[kv_namespaces]]
-# binding = "NETEASE_KV"
-# id = "你的真实KV命名空间id"
+# 不写 id：部署时由 wrangler 自动创建并绑定该命名空间（fork 安全，详见 README）。
+# 若想复用已存在的 KV（例如已填好 cookie_list / api_token），请在 Builds 的
+# Settings → Variables and Secrets 添加 Secret：名称 KV_ID，值=该命名空间 id；
+# ./deploy.sh 会自动把 id 注入后再部署。不设置则每次部署自动新建一个空 KV。
+[[kv_namespaces]]
+binding = "NETEASE_KV"
 
 [assets]
 directory = "public"
