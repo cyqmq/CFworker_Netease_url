@@ -859,6 +859,17 @@ export default {
       }
     }
 
+    // 先尝试静态资源（index.html / qrcode.min.js 等），命中则直接返回并禁用缓存；未命中再走 API
+    try {
+      const assetResp = await env.ASSETS.fetch(request);
+      if (assetResp && assetResp.status !== 404) {
+        return new Response(assetResp.body, {
+          status: assetResp.status,
+          headers: { ...assetResp.headers, 'Cache-Control': 'no-store' },
+        });
+      }
+    } catch (_) {}
+
     if (path === '/health') {
       return ok({
         service: 'running', cookie_status: cookie ? 'valid' : 'invalid',
@@ -899,16 +910,6 @@ export default {
     if (p === '/login/qr/generate') return handleQrGenerate();
     if (p === '/login/qr/check') return handleQrCheck(url.searchParams.get('key') || (data && data.key));
 
-    // 兜底：静态资源（index.html / qrcode.min.js 等）走 assets，并禁用缓存（避免 CF 边缘缓存旧页面）
-    try {
-      const assetResp = await env.ASSETS.fetch(request);
-      if (assetResp && assetResp.status !== 404) {
-        return new Response(assetResp.body, {
-          status: assetResp.status,
-          headers: { ...assetResp.headers, 'Cache-Control': 'no-store' },
-        });
-      }
-    } catch (_) {}
     return new Response('Netease Worker. Try /api/info', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   },
 };
