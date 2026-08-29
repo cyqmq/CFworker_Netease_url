@@ -166,32 +166,6 @@ function aesEncryptBlock(block, w) {
   return state;
 }
 
-/* AES-128-CBC（用于 weapi 双重加密的第二层）。keyBytes/ivBytes 均为 16 字节，PKCS7 填充 */
-function aesCbcEncrypt(plainBytes, keyBytes, ivBytes) {
-  const padLen = 16 - (plainBytes.length % 16);
-  const padded = new Uint8Array(plainBytes.length + padLen);
-  padded.set(plainBytes);
-  for (let i = 0; i < padLen; i++) padded[plainBytes.length + i] = padLen;
-  const w = keyExpansion(keyBytes);
-  const out = new Uint8Array(padded.length);
-  let prev = ivBytes;
-  for (let i = 0; i < padded.length; i += 16) {
-    const block = padded.subarray(i, i + 16);
-    const xored = new Uint8Array(16);
-    for (let j = 0; j < 16; j++) xored[j] = block[j] ^ prev[j];
-    const enc = aesEncryptBlock(xored, w);
-    out.set(enc, i);
-    prev = enc;
-  }
-  return out;
-}
-
-function bytesToBase64(bytes) {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-
 /* 匹配 Python json.dumps 默认格式 (ensure_ascii=True, ", " 与 ": ") */
 function pyJson(obj) {
   if (obj === null || obj === undefined) return 'null';
@@ -300,58 +274,25 @@ async function apiRequest(url, form, cookieStr, method = 'POST') {
   return resp.json();
 }
 
-/* ============================ 扫码登录（weapi） ============================ */
+/* ============================ 扫码登录（eapi） ============================ */
 
-const WEAPI_IV = enc('0102030405060708');
-const WEAPI_NONCE = enc('0CoJUm6Qyw8W8jud');
-const WEAPI_MODULUS =
-  '00e0b509f6259df8642dbc35665918c6d9e719e1e5a5b1e6b3d4f3c2a1c4e3b2a190f8f8b5b5e0e3b3c2d1e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3';
-
-function createSecret(size) {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const buf = new Uint8Array(size);
-  crypto.getRandomValues(buf);
-  let s = '';
-  for (let i = 0; i < size; i++) s += chars[buf[i] % chars.length];
-  return s;
+/* 从 Set-Cookie（数组或字符串）解析出 "name=value; name=value" 形式的 cookie 串 */
+function parseSetCookie(val) {
+  const arr = Array.isArray(val) ? val : (val || '').split(',');
+  const parts = [];
+  for (const item of arr) {
+    const pair = item.split(';')[0].trim();
+    if (pair && pair.includes('=')) parts.push(pair);
+  }
+  return parts.join('; ');
 }
 
-/* RSA-1024：将 16 字节随机密钥（反转后）做 m^e mod N，结果 hex 左补至 256 字符 */
-function rsaEncrypt(randStr) {
-  const reversed = randStr.split('').reverse().join('');
-  const bytes = enc(reversed);
-  let hex = '';
-  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
-  const m = BigInt('0x' + hex);
-  const N = BigInt('0x' + WEAPI_MODULUS);
-  const e = 0x010001n;
-  const c = m ** e % N;
-  return c.toString(16).padStart(256, '0');
-}
-
-function weapiEncrypt(data) {
-  const text = pyJson(data);
-  const rand = createSecret(16);
-  const inner = aesCbcEncrypt(enc(text), WEAPI_NONCE, WEAPI_IV);
-  const outer = aesCbcEncrypt(inner, enc(rand), WEAPI_IV);
-  const params = bytesToBase64(outer);
-  const encSecKey = rsaEncrypt(rand);
-  return { params, encSecKey };
-}
-
-async function weapiRequest(url, data, cookieStr) {
-  const { params, encSecKey } = weapiEncrypt(data);
-  const body = `params=${encodeURIComponent(params)}&encSecKey=${encodeURIComponent(encSecKey)}`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { ...baseHeaders(cookieStr), 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
-  return resp.json();
-}
-
+/* 网易云扫码登录：参考 laowang/Netease_url，使用 eapi 加密（AES-128-ECB + MD5），
+   无需 RSA/weapi。interface3 域名在 CF 上被墙，改用 music.163.com 主机。 */
 async function handleQrGenerate() {
-  const r = await weapiRequest('https://music.163.com/weapi/login/qrcode/key', { type: 0 }, '');
+  const config = { os: 'pc', appver: '', osver: '', deviceId: 'pyncm!' };
+  const payload = { type: 1, header: pyJson(config) };
+  const r = await eapiRequest('https://music.163.com/eapi/login/qrcode/unikey', payload, '');
   const unikey = r && r.unikey;
   if (!unikey) return err('获取二维码失败: ' + JSON.stringify(r), 500);
   return ok({ unikey, qr_url: `https://music.163.com/login?codekey=${unikey}` }, '获取二维码成功');
@@ -359,11 +300,29 @@ async function handleQrGenerate() {
 
 async function handleQrCheck(key) {
   if (!key) return err("必须提供 'key'");
-  const r = await weapiRequest('https://music.163.com/weapi/login/qrcode/check', { key, type: 1 }, '');
+  const config = { os: 'pc', appver: '', osver: '', deviceId: 'pyncm!' };
+  const payload = { key, type: 1, header: pyJson(config) };
+  const url = 'https://music.163.com/eapi/login/qrcode/client/login';
+  const params = encryptParams(url, payload);
+  const body = `params=${encodeURIComponent(params)}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { ...baseHeaders(''), 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  let r = {};
+  try { r = await resp.json(); } catch (_) {}
   const code = (r && r.code) || 0;
+  let cookie = '';
+  if (code === 803) {
+    const sc = (resp.headers && resp.headers.getSetCookie)
+      ? resp.headers.getSetCookie()
+      : (resp.headers.get('set-cookie') || '');
+    cookie = parseSetCookie(sc);
+  }
   return ok({
     code,
-    cookie: code === 803 ? (r.cookie || '') : '',
+    cookie,
     message: (r && r.message) || '',
   }, '检查完成');
 }
