@@ -825,6 +825,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+    const p = path.toLowerCase();
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         headers: {
@@ -885,7 +886,6 @@ export default {
     const authErr = checkAuth(request, url, apiToken);
     if (authErr) return authErr;
 
-    const p = path.toLowerCase();
     if (p === '/song' || p === '/song_v1') return handleSong(data, cookieStr, kv);
     if (p === '/search' || p === '/search') return handleSearch(data, cookieStr);
     if (p === '/playlist' || p === '/playlist') return handlePlaylist(data, cookieStr);
