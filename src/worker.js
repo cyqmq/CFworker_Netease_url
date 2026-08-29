@@ -213,20 +213,32 @@ function encryptParams(url, payload) {
 
 /* ============================ 请求辅助 ============================ */
 
-/* 从 KV Cookie 池轮换取一个 Cookie，回退到 env.COOKIE */
+/* 从 KV Cookie 池轮换取一个 Cookie，回退到 env.COOKIE。
+   若 cookie_meta 中标记某 cookie 失效(valid===false)，则自动跳过，只在有效 cookie 间轮询。 */
 async function getCookieFromPool(kv, env) {
   let list = [];
   if (kv) {
     try { const raw = await kv.get('cookie_list'); if (raw) list = JSON.parse(raw); } catch (_) {}
   }
   if (!Array.isArray(list) || list.length === 0) return env.COOKIE || '';
+  let meta = {};
+  if (kv) { try { meta = JSON.parse(await kv.get('cookie_meta') || '{}'); } catch (_) {} }
+  const validIdx = [];
+  for (let i = 0; i < list.length; i++) {
+    const h = md5hex(buildCookie(list[i]));
+    const m = meta[h];
+    if (!m || m.valid !== false) validIdx.push(i);
+  }
+  const pool = validIdx.length ? validIdx : list.map((_, i) => i);
   let idx = 0;
   if (kv) {
     try { idx = parseInt((await kv.get('cookie_index')) || '0', 10) || 0; } catch (_) {}
-    const next = (idx + 1) % list.length;
-    kv.put('cookie_index', String(next)).catch(() => {});
   }
-  return list[idx % list.length];
+  let pick = pool[0];
+  for (const i of pool) { if (i >= idx) { pick = i; break; } }
+  const nextIdx = (pick + 1) % list.length;
+  if (kv) kv.put('cookie_index', String(nextIdx)).catch(() => {});
+  return list[pick];
 }
 
 function buildCookie(userCookie) {

@@ -97,6 +97,7 @@
           <button onclick="adminCheckCookies()">刷新 Cookie 状态</button>
           <button class="sec" onclick="adminClearCache()">清空 URL 缓存</button>
           <button class="sec" onclick="adminShowAdd()">添加 Cookie</button>
+          <button class="sec" onclick="adminShowQr()">扫码添加</button>
           <button class="sec" onclick="adminShowPw()">修改密码</button>
           <button class="sec" onclick="adminLogout()">退出</button>
         </div>
@@ -104,6 +105,12 @@
           <div class="hint">粘贴一条 Cookie（需含 MUSIC_U=...），加入 KV 共享池</div>
           <textarea id="admin-cookie-input" rows="3" style="width:100%;background:#0c0e12;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:10px"></textarea>
           <div class="row" style="margin-top:8px"><button onclick="adminAddCookie()">保存</button></div>
+        </div>
+        <div id="admin-qr-box" style="display:none;margin:12px 0;padding:12px;border:1px solid var(--border);border-radius:8px">
+          <div class="hint">用网易云 App 扫描下方二维码：扫码成功后会<b>自动把 Cookie 加入 KV 解析池</b>（与首页"个人登录"不同——这里用于服务端共享解析，不存浏览器）。可连续扫码添加多个账号，每加一个会自动刷新等待下一次。</div>
+          <div id="mgmt-qr" style="width:200px;height:200px;margin:12px 0;background:#fff;border-radius:8px;overflow:hidden"></div>
+          <div id="mgmt-qr-status" class="hint"></div>
+          <div class="row" style="margin-top:8px"><button class="sec" onclick="mgmtQrStart()">刷新二维码</button></div>
         </div>
         <div id="admin-pw-box" style="display:none;margin:12px 0;padding:12px;border:1px solid var(--border);border-radius:8px">
           <input id="admin-old-pw" type="password" placeholder="原密码" style="margin-bottom:8px" />
@@ -359,6 +366,53 @@
     const o = document.getElementById('admin-old-pw').value, n = document.getElementById('admin-new-pw').value;
     const r = await adminApi('/admin/password', { old: o, password: n }, adminToken());
     show('admin-msg', r);
+  }
+
+  /* 管理页面扫码添加 Cookie：与首页"个人登录"不同，这里扫码后把 Cookie 加入 KV 解析池 */
+  let mgmtQrTimer = null;
+  function mgmtQrStop() { if (mgmtQrTimer) { clearInterval(mgmtQrTimer); mgmtQrTimer = null; } }
+  function adminShowQr() {
+    const e = document.getElementById('admin-qr-box');
+    const show = e.style.display === 'none';
+    e.style.display = show ? 'block' : 'none';
+    if (show) mgmtQrStart(); else mgmtQrStop();
+  }
+  async function mgmtQrStart() {
+    mgmtQrStop();
+    const box = document.getElementById('mgmt-qr');
+    box.innerHTML = '';
+    document.getElementById('mgmt-qr-status').textContent = '正在获取二维码…';
+    const r = await fetch('/login/qr/generate').then((x) => x.json());
+    const unikey = r && r.data && r.data.unikey;
+    if (!unikey) { document.getElementById('mgmt-qr-status').textContent = '获取失败，请重试'; return; }
+    new QRCode(box, { text: r.data.qr_url, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.M });
+    document.getElementById('mgmt-qr-status').textContent = '请使用网易云 App 扫码（扫码后自动加入解析池）';
+    mgmtQrTimer = setInterval(async () => {
+      const c = await fetch('/login/qr/check?key=' + encodeURIComponent(unikey)).then((x) => x.json());
+      const code = c.data && c.data.code;
+      if (code === 802) {
+        document.getElementById('mgmt-qr-status').textContent = '已扫码，请在 App 确认';
+      } else if (code === 800) {
+        document.getElementById('mgmt-qr-status').textContent = '二维码过期，重新获取…';
+        mgmtQrStart();
+      } else if (code === 803) {
+        clearInterval(mgmtQrTimer); mgmtQrTimer = null;
+        const cookie = c.data && c.data.cookie;
+        if (cookie) {
+          const add = await adminApi('/admin/cookie/add', { cookie }, adminToken());
+          if (add.success) {
+            document.getElementById('mgmt-qr-status').textContent = '已加入解析池，继续等待下一次扫码…';
+            loadAdmin();
+            mgmtQrStart();
+          } else {
+            document.getElementById('mgmt-qr-status').textContent = '加入失败：' + (add.message || '');
+          }
+        } else {
+          document.getElementById('mgmt-qr-status').textContent = '未获取到 Cookie，请重试';
+          mgmtQrStart();
+        }
+      }
+    }, 2000);
   }
 </script>
 </body>
