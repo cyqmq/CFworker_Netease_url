@@ -12,7 +12,8 @@
 - 歌曲搜索、单曲解析、歌词、歌单解析、专辑解析
 - 多音质：standard / exhigh / lossless / hires / sky / jyeffect / jymaster / dolby
 - 音乐直链获取与代理下载（/download 直接回源流式返回）
-- 内置 Web 界面（public/index.html）
+- **酷我在线直链**（免鉴权链路，免登录）：搜索 + 128k/320k mp3 直链，直链模式适合原生/IDM/Aria2 下载（见下方「酷我音乐」）
+- 内置 Web 界面（public/index.html，含「酷我直链」标签页）
 - 客户端扫码登录（自带 Cookie，无需服务器 Cookie 池）
 
 ## 部署
@@ -162,10 +163,35 @@ Base URL 为你的 Worker 地址。支持 GET（query）与 POST（JSON 或 form
 | `/playlist` | GET/POST | `id` | 歌单解析（批量拉取曲目） |
 | `/album` | GET/POST | `id` | 专辑解析 |
 | `/download` | GET/POST | `id`，`quality`，`format`(file/json) | 下载/解析 |
+| `/kuwo/search` | GET/POST | `keyword`，`pn`(0起)，`rn`(≤100) | 酷我搜索 |
+| `/kuwo/url` | GET/POST | `mid` | 酷我 mp3 直链 |
 
 所有接口支持 CORS（`Access-Control-Allow-Origin: *`）。
 
 也可通过 `?cookie=` 或请求头 `x-ner-cookie` 临时覆盖服务端 Cookie。
+
+## 酷我音乐（在线直链，免登录免鉴权）
+
+额外内置的酷我音源，走**免鉴权链路**（无需 kw_token / Secret / Cookie）：
+`search.kuwo.cn/r.s` 搜索 → `mobi.kuwo.cn/mobi.s` 拿 320k/128k mp3 → `antiserver.kuwo.cn/anti.s` 兜底 128k。
+
+接口（与网易 API 同一套鉴权：同源免 token / 外部带 token）：
+
+| 接口 | 参数 | 说明 |
+|------|------|------|
+| `/kuwo/search` | `keyword`，`pn`，`rn` | 返回 `id/name/artist/album/pic/duration/is_pay` |
+| `/kuwo/url` | `mid` | 返回直链 `url`、`bitrate`、`https_ok`、`http_fallback`、`is_preview` |
+
+说明：
+- 直链默认已把 `http://` 改写为 `https://`（原链放 `http_fallback`）；若 https 直链在浏览器不可用，用外部工具下载 `http_fallback`。
+- KV 缓存键 `kuwo:url:{mid}`，TTL 3600s（与直链有效期对齐）。
+- **VIP/付费曲**的 mobi 会返回约 11 秒试听片段（`is_preview=true`、`bitrate=1`），请换其他音源或平台，不要误当完整歌曲。
+- 直链模式建议：浏览器原生下载 / IDM / Aria2 / `curl -L "<url>"`。
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"keyword":"周杰伦 晴天"}' "https://你的worker/kuwo/search"
+curl -X POST -H "Content-Type: application/json" -d '{"mid":"228908"}' "https://你的worker/kuwo/url"
+```
 
 ## 客户端扫码登录（自带 Cookie，无需服务器 Cookie 池）
 

@@ -27,3 +27,10 @@ log('== /album ==', `${a.data?.album?.name} | tracks:${a.data?.album?.songs?.len
 
 const pl = await call('/playlist', { id: '2478165303' });
 log('== /playlist ==', `${pl.data?.playlist?.name} | tracks:${pl.data?.playlist?.tracks?.length}`);
+
+const kw = await call('/kuwo/search', { keyword: '周杰伦', rn: 3 });
+log('== /kuwo/search ==', (kw.data || []).map((x) => `${x.id} ${x.name} - ${x.artist}`));
+if (kw.data && kw.data[0]) {
+  const u = await call('/kuwo/url', { mid: kw.data[0].id });
+  log('== /kuwo/url ==', u.data ? `${u.data.source} | https_ok=${u.data.https_ok} | ${u.data.url}` : u);
+}

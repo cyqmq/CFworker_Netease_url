@@ -43,6 +43,7 @@
     <div class="tab" data-t="playlist">歌单解析</div>
     <div class="tab" data-t="album">专辑解析</div>
     <div class="tab" data-t="download">音乐下载</div>
+    <div class="tab" data-t="kuwo">酷我直链</div>
   </div>
 
   <section class="panel active" id="p-song">
@@ -161,6 +162,15 @@
     </div>
     <pre id="dl-out">// 结果将显示在这里</pre>
   </section>
+
+  <section class="panel" id="p-kuwo">
+    <div class="row"><input id="kw-kw" placeholder="酷我关键词，如：周杰伦 稻香" /></div>
+    <div class="row"><button onclick="doKuwoSearch()">搜索</button></div>
+    <div class="hint">酷我音源：免费歌曲直接回源给 mp3 直链。直链约 1 小时有效；VIP / 版权受限歌曲可能拿不到完整文件（会给出错误提示）。</div>
+    <div id="kw-msg" style="display:none" class="hint"></div>
+    <div id="kw-list"></div>
+    <pre id="kw-out" style="display:none">// 结果将显示在这里</pre>
+  </section>
 </main>
 
 <script src="/qrcode.min.js"></script>
@@ -234,6 +244,88 @@
   }
   // 健康检查
   fetch('/health').then(r=>r.json()).then(d=>console.log('health', d)).catch(()=>{});
+
+  /* ===== 酷我 → 在线直链（原生/外部工具下载） ===== */
+  const kwEsc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const kwFileName = (name, artist) => (kwEsc(name || 'song') + ' - ' + kwEsc(artist || 'unknown')).replace(/[\\/:*?"<>|\s]+/g, '_');
+  async function doKuwoSearch() {
+    const key = document.getElementById('kw-kw').value.trim();
+    const msg = document.getElementById('kw-msg');
+    const list = document.getElementById('kw-list');
+    if (!key) return;
+    msg.style.display = 'none'; list.innerHTML = '搜索中…';
+    try {
+      const r = await api('/kuwo/search', { keyword: key });
+      if (!r.success || !r.data || !r.data.length) { list.innerHTML = ''; show('kw-out', r); document.getElementById('kw-out').style.display = 'block'; msg.style.display = 'none'; return; }
+      document.getElementById('kw-out').style.display = 'none';
+      window.kwSongs = r.data;
+      list.innerHTML = r.data.map((s, i) => `
+        <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <div style="min-width:0;flex:1">
+              <div style="font-weight:600">${kwEsc(s.name)}</div>
+              <div style="color:var(--muted);font-size:12px">${kwEsc(s.artist)}${s.album ? ' · ' + kwEsc(s.album) : ''}</div>
+            </div>
+            <div class="kuwo-ops" id="kwops-${i}" style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="sec" style="padding:6px 12px;font-size:12px" onclick="kuwoGetUrl(${i})">获取直链</button>
+            </div>
+          </div>
+        </div>`).join('');
+    } catch (e) {
+      list.innerHTML = ''; show('kw-out', { success: false, message: '酷我请求失败：' + e.message });
+      document.getElementById('kw-out').style.display = 'block';
+    }
+  }
+  async function kuwoGetUrl(i) {
+    const s = window.kwSongs[i];
+    const box = document.getElementById('kwops-' + i);
+    if (!s) return;
+    box.innerHTML = '<span class="hint" style="margin:0">获取中…</span>';
+    const r = await api('/kuwo/url', { mid: s.id });
+    if (!r.success || !r.data || !r.data.url) {
+      box.innerHTML = `<span class="hint" style="margin:0;color:#ff9d9d">${kwEsc(r.message || '获取失败')}</span>`;
+      return;
+    }
+    const d = r.data;
+    let html = '';
+    if (d.is_preview) {
+      html += `<span class="hint" style="margin:0;color:#ffb074">⚠ 该曲为 VIP/版权受限，以下可能是试听片段（约 11s）。尽量选「播放」先确认，或换其他平台音源。</span>`;
+    }
+    const file = kwFileName(s.name, s.artist) + '.mp3';
+    if (d.http_fallback) {
+      html += `<span class="hint" style="margin:0;color:#ffb074">http 直链，https 不可用时请用外部工具（下方原链）</span>`;
+      html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'url')">复制原链</button>`;
+    } else {
+      html += `<a class="download-link" href="${kwEsc(d.url)}" download="${file}">下载 ${d.bitrate || 128}k mp3</a>`;
+      html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'url')">复制直链</button>`;
+    }
+    html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kuwoPlay(${i})">试听</button>`;
+    html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'curl')">复制 curl 命令</button>`;
+    box.innerHTML = html;
+  }
+  function kuwoPlay(i) {
+    const s = window.kwSongs[i];
+    api('/kuwo/url', { mid: s.id }).then((r) => {
+      if (r.data && r.data.url) window.open(r.data.url, '_blank');
+    });
+  }
+  function kwCopy(i, type) {
+    const s = window.kwSongs[i];
+    if (!s) return;
+    const toCopy = () => {
+      if (!window.kwUrl) return;
+      const file = kwFileName(s.name, s.artist) + '.mp3';
+      const text = type === 'curl' ? `curl -L -H "Referer: http://www.kuwo.cn/" -o "${file}" "${window.kwUrl}"` : window.kwUrl;
+      navigator.clipboard.writeText(text).then(() => alert('已复制' + (type === 'curl' ? ' curl 命令' : ' 链接'))).catch(() => alert('复制失败，请手动复制'));
+    };
+    // 预先取一次直链（供复制内容使用）
+    api('/kuwo/url', { mid: s.id }).then((r) => {
+      if (r.data && r.data.url) { window.kwUrl = r.data.url; }
+      toCopy();
+    });
+  }
 
   /* ===== 扫码登录（Cookie 存本机，不占用服务端） ===== */
   function updateLoginBtn() {

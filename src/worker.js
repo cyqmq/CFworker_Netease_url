@@ -491,6 +491,127 @@ function checkAuth(request, url, apiToken) {
   return err('未授权：外部调用需携带正确的 API Token', 401);
 }
 
+/* ============================ 酷我音乐（在线直链模式） ============================ */
+
+/*
+ * 免鉴权链路（2026-09 实测可用，无需 kw_token / Secret / reqId 签名）：
+ *   搜索：search.kuwo.cn/r.s（老接口，免鉴权，返回 abslist）
+ *   直链：mobi.kuwo.cn/mobi.s?f=web&source=jiakong&type=convert_url_with_sign（320k/128k mp3，免鉴权）
+ *         → 兜底 antiserver.kuwo.cn/anti.s?type=convert_url3（128k，纯 https 直链）
+ *   VIP/付费歌 mobi 会返回 bitrate=1、duration≈11s 的“试听片段”，据此标记 preview。
+ */
+const KUWO_UA = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.164 Safari/537.36';
+const KUWO_CDN_IMG = 'https://img1.kuwo.cn/star/albumcover/';
+const KUWO_TTL = 3600; // 直链有效期约 1 小时，缓存跟随
+
+async function kuwoText(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': KUWO_UA, Accept: 'application/json,text/plain,*/*' },
+    cf: { cacheTtl: 0 },
+  });
+  if (!res.ok) throw new Error('KUWO HTTP ' + res.status);
+  return res.text();
+}
+
+async function handleKuwoSearch(data) {
+  const keyword = data.keyword || data.key;
+  if (!keyword) return err("必须提供 'keyword'");
+  const pn = Math.max(0, parseInt(data.pn || '0', 10) || 0);
+  const rn = Math.min(parseInt(data.rn || '30', 10) || 30, 100);
+  const url = `https://search.kuwo.cn/r.s?pn=${pn}&rn=${rn}&all=${encodeURIComponent(keyword)}`
+    + '&ft=music&newsearch=1&alflac=1&rformat=json&encoding=utf8&show_copyright_off=1'
+    + '&pcmp4=1&itemset=web_2013&ver=mbox&plat=pc&vipver=MUSIC_9.2.0.0_W6'
+    + '&devid=11404450&newver=1&issubtitle=1&pcjson=1';
+  let j;
+  try {
+    let text = await kuwoText(url);
+    const start = text.indexOf('{'); // 兼容前导噪音
+    if (start > 0) text = text.slice(start);
+    j = JSON.parse(text);
+  } catch (e) {
+    return err('酷我搜索请求失败：' + e.message, 502);
+  }
+  const list = j.abslist;
+  if (!Array.isArray(list)) return err('酷我搜索失败（需确认 Worker→search.kuwo.cn 连通性）', 502);
+  const songs = list
+    .map((it) => {
+      let id = String(it.MUSICRID || it.musicrid || '');
+      if (id.startsWith('MUSIC_')) id = id.slice(6);
+      if (!id) return null;
+      const albumImg = it.hts_MVPIC || (it.web_albumpic_short ? KUWO_CDN_IMG + it.web_albumpic_short : '');
+      return {
+        id, name: it.SONGNAME || it.songname || it.NAME,
+        artist: String(it.ARTIST || it.artist || '').replace(/&/g, '、'),
+        album: it.ALBUM || it.album || '',
+        pic: albumImg,
+        duration: parseInt(it.DURATION || '0', 10) || 0,
+        is_pay: Number(it.PAY || 0) !== 0 || Number(it.fpay || 0) !== 0,
+      };
+    })
+    .filter(Boolean);
+  return ok(songs, '搜索完成');
+}
+
+/* 从 mobi.s 拿 mp3 直链 (br: '320kmp3' | '128kmp3') -> {url, bitrate, duration} 或 null */
+async function kuwoMobi(mid, br) {
+  const url = `http://mobi.kuwo.cn/mobi.s?f=web&source=jiakong&type=convert_url_with_sign&rid=${mid}&br=${br}`;
+  try {
+    const j = JSON.parse(await kuwoText(url));
+    const d = j.data;
+    if (d && d.url) return { url: d.url, bitrate: Number(d.bitrate) || 0, duration: Number(d.duration) || 0 };
+  } catch (_) {}
+  return null;
+}
+
+/* anti.s 兜底：纯 https 直链（128k） */
+async function kuwoAnti(mid) {
+  const url = `https://antiserver.kuwo.cn/anti.s?type=convert_url3&rid=${mid}&format=mp3`;
+  try {
+    const j = JSON.parse(await kuwoText(url));
+    if (j.url) return { url: j.url, bitrate: 128, duration: 0 };
+  } catch (_) {}
+  return null;
+}
+
+async function handleKuwoUrl(data, kv) {
+  const mid = String(data.mid || data.id || '').replace(/\bMUSIC_/g, '');
+  if (!mid) return err("必须提供 'mid'");
+  const cacheKey = `kuwo:url:${mid}`;
+  if (kv) {
+    try {
+      const v = await kv.get(cacheKey);
+      if (v) { const o = JSON.parse(v); if (o && o.url) return ok(o, '获取直链成功（缓存）'); }
+    } catch (_) {}
+  }
+
+  let src = null, source = '', isPreview = false;
+  src = (await kuwoMobi(mid, '320kmp3')) || (await kuwoMobi(mid, '128kmp3'));
+  if (src) {
+    // VIP/付费歌返回试听片段（bitrate=1、duration≈11s）
+    if (src.bitrate < 2 || (src.duration > 0 && src.duration < 30)) { isPreview = true; source = 'mobi(试听片段)'; }
+    else source = 'mobi';
+  } else {
+    src = await kuwoAnti(mid);
+    if (src) source = 'anti.s';
+  }
+  if (!src) return err('酷我直链获取失败：可能为 VIP/版权受限歌曲', 404);
+
+  const httpFallback = /^http:\/\//i.test(src.url) ? src.url : '';
+  const urlStr = httpFallback ? httpFallback.replace(/^http:\/\//i, 'https://') : src.url;
+  const out = {
+    id: mid, url: urlStr, source,
+    https_ok: urlStr.startsWith('https://'),
+    http_fallback: httpFallback || '',
+    bitrate: src.bitrate, duration: src.duration,
+    is_preview: isPreview,
+    expires: KUWO_TTL,
+  };
+  if (kv) {
+    try { await kv.put(cacheKey, JSON.stringify(out), { expirationTtl: KUWO_TTL }); } catch (_) {}
+  }
+  return ok(out, isPreview ? '获取直链成功（注意：可能为试听片段）' : '获取直链成功');
+}
+
 /* ============================ 路由 ============================ */
 
 async function handleSong(data, cookieStr, kv) {
@@ -827,10 +948,12 @@ async function handleAdminCookieRemove(data, kv) {
 }
 async function handleAdminCacheClear(kv) {
   let n = 0;
-  try {
-    const k = await kv.list({ prefix: 'url:' });
-    for (const key of k.keys) { await kv.delete(key.name); n++; }
-  } catch (_) {}
+  for (const prefix of ['url:', 'kuwo:url:']) {
+    try {
+      const k = await kv.list({ prefix });
+      for (const key of k.keys) { await kv.delete(key.name); n++; }
+    } catch (_) {}
+  }
   return ok({ deleted: n }, '已清空 URL 缓存');
 }
 async function handleAdminPassword(data, kv) {
@@ -909,6 +1032,8 @@ export default {
     const authErr = checkAuth(request, url, apiToken);
     if (authErr) return authErr;
 
+    if (p === '/kuwo/search' || p === '/kuwo') return handleKuwoSearch(data);
+    if (p === '/kuwo/url') return handleKuwoUrl(data, kv);
     if (p === '/song' || p === '/song_v1') return handleSong(data, cookieStr, kv);
     if (p === '/search' || p === '/search') return handleSearch(data, cookieStr);
     if (p === '/playlist' || p === '/playlist') return handlePlaylist(data, cookieStr);
