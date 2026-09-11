@@ -504,9 +504,9 @@ const KUWO_UA = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML,
 const KUWO_CDN_IMG = 'https://img1.kuwo.cn/star/albumcover/';
 const KUWO_TTL = 3600; // 直链有效期约 1 小时，缓存跟随
 
-async function kuwoText(url) {
+async function kuwoText(url, extraHeaders) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': KUWO_UA, Accept: 'application/json,text/plain,*/*' },
+    headers: Object.assign({ 'User-Agent': KUWO_UA, Accept: 'application/json,text/plain,*/*' }, extraHeaders),
     cf: { cacheTtl: 0 },
   });
   if (!res.ok) throw new Error('KUWO HTTP ' + res.status);
@@ -552,13 +552,25 @@ async function handleKuwoSearch(data) {
   return ok(songs, '搜索完成');
 }
 
-/* 从 mobi.s 拿 mp3 直链 (br: '320kmp3' | '128kmp3') -> {url, bitrate, duration} 或 null */
+/* 从 mobi.s 拿 mp3 直链 (br: '320kmp3' | '128kmp3')
+   对齐 HotDownloader：随机 user/android_id + from=PC + 严格校验 bitrate/format，
+   校验不通过视为该音质不可用（VIP 歌返回的试听片段不会通过校验）。 */
 async function kuwoMobi(mid, br) {
-  const url = `http://mobi.kuwo.cn/mobi.s?f=web&source=jiakong&type=convert_url_with_sign&rid=${mid}&br=${br}`;
+  const reqBitrate = parseInt(br, 10) || 0;
+  const reqFormat = (br.split('k')[1] || 'mp3').toLowerCase();
+  const user = Math.floor(Math.random() * 4294967296);
+  const android_id = Array.from({ length: 8 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
+  const url = `http://mobi.kuwo.cn/mobi.s?f=web&user=${user}&android_id=${android_id}` +
+    `&source=kwplayer_ar_5.1.0.0_B_jiakong_vh.apk&type=convert_url_with_sign&from=PC` +
+    `&rid=${mid}&br=${br}&format=${reqFormat}`;
+  const headers = { 'User-Agent': 'okhttp/4.10.0', Referer: 'http://www.kuwo.cn/' };
   try {
-    const j = JSON.parse(await kuwoText(url));
+    const j = JSON.parse(await kuwoText(url, headers));
     const d = j.data;
-    if (d && d.url) return { url: d.url, bitrate: Number(d.bitrate) || 0, duration: Number(d.duration) || 0 };
+    if (!d || !d.url) return null;
+    if (Number(d.bitrate) !== reqBitrate) return null;
+    if (d.format && d.format.toLowerCase() !== reqFormat) return null;
+    return { url: d.url, bitrate: Number(d.bitrate) || 0, duration: Number(d.duration) || 0 };
   } catch (_) {}
   return null;
 }
@@ -584,17 +596,15 @@ async function handleKuwoUrl(data, kv) {
     } catch (_) {}
   }
 
-  let src = null, source = '', isPreview = false;
+  let src = null, source = '';
   src = (await kuwoMobi(mid, '320kmp3')) || (await kuwoMobi(mid, '128kmp3'));
   if (src) {
-    // VIP/付费歌返回试听片段（bitrate=1、duration≈11s）
-    if (src.bitrate < 2 || (src.duration > 0 && src.duration < 30)) { isPreview = true; source = 'mobi(试听片段)'; }
-    else source = 'mobi';
+    source = 'mobi';
   } else {
     src = await kuwoAnti(mid);
     if (src) source = 'anti.s';
   }
-  if (!src) return err('酷我直链获取失败：可能为 VIP/版权受限歌曲', 404);
+  if (!src) return err('酷我直链获取失败：可能为 VIP/版权受限歌曲（请试其他音源或平台）', 404);
 
   const httpFallback = /^http:\/\//i.test(src.url) ? src.url : '';
   const urlStr = httpFallback ? httpFallback.replace(/^http:\/\//i, 'https://') : src.url;
@@ -603,13 +613,12 @@ async function handleKuwoUrl(data, kv) {
     https_ok: urlStr.startsWith('https://'),
     http_fallback: httpFallback || '',
     bitrate: src.bitrate, duration: src.duration,
-    is_preview: isPreview,
     expires: KUWO_TTL,
   };
   if (kv) {
     try { await kv.put(cacheKey, JSON.stringify(out), { expirationTtl: KUWO_TTL }); } catch (_) {}
   }
-  return ok(out, isPreview ? '获取直链成功（注意：可能为试听片段）' : '获取直链成功');
+  return ok(out, '获取直链成功');
 }
 
 /* ============================ 路由 ============================ */
