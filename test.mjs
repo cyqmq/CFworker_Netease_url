@@ -31,6 +31,12 @@ log('== /playlist ==', `${pl.data?.playlist?.name} | tracks:${pl.data?.playlist?
 const kw = await call('/kuwo/search', { keyword: '周杰伦', rn: 3 });
 log('== /kuwo/search ==', (kw.data || []).map((x) => `${x.id} ${x.name} - ${x.artist}`));
 if (kw.data && kw.data[0]) {
-  const u = await call('/kuwo/url', { mid: kw.data[0].id });
-  log('== /kuwo/url ==', u.data ? `${u.data.source} | https_ok=${u.data.https_ok} | ${u.data.url}` : u);
+  const first = kw.data[0];
+  log('== /kuwo/qualities ==', (first.qualities || []).map((q) => `${q.br}(${q.size})`).join(', '));
+  const u = await call('/kuwo/url', { mid: first.id, br: (first.qualities || [])[0]?.br || '320kmp3' });
+  log('== /kuwo/url ==', u.data ? `${u.data.source} | ${u.data.bitrate}k ${u.data.format} | https_ok=${u.data.https_ok}` : u);
+  const u128 = await call('/kuwo/url', { mid: first.id, br: '128kmp3' });
+  log('== /kuwo/url 128 ==', u128.data ? `${u128.data.source} | ${u128.data.bitrate}k ${u128.data.format}` : u128);
+  const uflac = await call('/kuwo/url', { mid: first.id, br: '20900kmflac' });
+  log('== /kuwo/url flac(降级预期) ==', uflac.data ? `${uflac.data.source} | ${uflac.data.bitrate}k ${uflac.data.format} | enc=${uflac.data.encrypted}` : uflac);
 }

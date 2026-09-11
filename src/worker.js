@@ -502,7 +502,20 @@ function checkAuth(request, url, apiToken) {
  */
 const KUWO_UA = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.164 Safari/537.36';
 const KUWO_CDN_IMG = 'https://img1.kuwo.cn/star/albumcover/';
-const KUWO_TTL = 3600; // 直链有效期约 1 小时，缓存跟随
+const KUWO_TTL = 3600; // 直链有效期约一小时，缓存跟随
+function parseSizeKB(s) { const n = parseFloat(s); if (Number.isNaN(n) || n <= 0) return 0; const u = String(s).toLowerCase().slice(-2); return u==='mb'? Math.round(n*1048576) : u==='kb'? Math.round(n*1024) : Math.round(n); }
+function buildKuwoQualities(info) {
+  if (!info) return [];
+  const re = /level:(\w+),bitrate:(\d+),format:(\w+),size:([\d.]+\w+)/g;
+  const map = new Map(); let m;
+  while ((m = re.exec(info)) !== null) {
+    const br = parseInt(m[2], 10); if (map.has(br)) continue;
+    const fmt = m[3].toLowerCase();
+    const label = ({ 20900:'臻品母带',24000:'全景声',20501:'全景声5.1',20201:'全景声',20000:'臻品',4000:'hires',2000:'flac',320:'320k',128:'128k',300:'300kogg',192:'192kogg',100:'100kogg',48:'48kaac' })[br] || fmt;
+    map.set(br, { quality: label, bitrate: br, format: fmt, size: parseSizeKB(m[4]), br: `${br}k${fmt}` });
+  }
+  return [...map.values()];
+}
 
 async function kuwoText(url, extraHeaders) {
   const res = await fetch(url, {
@@ -546,6 +559,7 @@ async function handleKuwoSearch(data) {
         pic: albumImg,
         duration: parseInt(it.DURATION || '0', 10) || 0,
         is_pay: Number(it.PAY || 0) !== 0 || Number(it.fpay || 0) !== 0,
+        qualities: buildKuwoQualities(it.N_MINFO || it.MINFO || ''),
       };
     })
     .filter(Boolean);
@@ -570,7 +584,7 @@ async function kuwoMobi(mid, br) {
     if (!d || !d.url) return null;
     if (Number(d.bitrate) !== reqBitrate) return null;
     if (d.format && d.format.toLowerCase() !== reqFormat) return null;
-    return { url: d.url, bitrate: Number(d.bitrate) || 0, duration: Number(d.duration) || 0 };
+    return { url: d.url, bitrate: Number(d.bitrate) || 0, format: reqFormat, duration: Number(d.duration) || 0, ekey: d.ekey || '' };
   } catch (_) {}
   return null;
 }
@@ -588,7 +602,10 @@ async function kuwoAnti(mid) {
 async function handleKuwoUrl(data, kv) {
   const mid = String(data.mid || data.id || '').replace(/\bMUSIC_/g, '');
   if (!mid) return err("必须提供 'mid'");
-  const cacheKey = `kuwo:url:${mid}`;
+
+  const reqBr = (data.br || '').toString().toLowerCase();
+  const want = reqBr || '320kmp3';
+  const cacheKey = `kuwo:url:${mid}:${want}`;
   if (kv) {
     try {
       const v = await kv.get(cacheKey);
@@ -596,29 +613,34 @@ async function handleKuwoUrl(data, kv) {
     } catch (_) {}
   }
 
+  // 降级链：先尝试用户所选音质，失败再依 320k -> 128k 降级
+  const chain = [want];
+  if (want !== '320kmp3') chain.push('320kmp3');
+  if (want !== '128kmp3') chain.push('128kmp3');
+
   let src = null, source = '';
-  src = (await kuwoMobi(mid, '320kmp3')) || (await kuwoMobi(mid, '128kmp3'));
-  if (src) {
-    source = 'mobi';
-  } else {
-    src = await kuwoAnti(mid);
-    if (src) source = 'anti.s';
+  for (const br of chain) {
+    const got = await kuwoMobi(mid, br);
+    if (got) { src = got; source = 'mobi:' + br; break; }
   }
-  if (!src) return err('酷我直链获取失败：可能为 VIP/版权受限歌曲（请试其他音源或平台）', 404);
+  if (!src && !reqBr) { src = await kuwoAnti(mid); if (src) source = 'anti.s'; }
+  if (!src) return err('酷我直链获取失败：该音质不可用（可能为 VIP/版权受限，请降低音质或换其他音源）', 404);
 
   const httpFallback = /^http:\/\//i.test(src.url) ? src.url : '';
   const urlStr = httpFallback ? httpFallback.replace(/^http:\/\//i, 'https://') : src.url;
+  const isEnc = ['mflac', 'mgg'].includes(src.format);
   const out = {
     id: mid, url: urlStr, source,
     https_ok: urlStr.startsWith('https://'),
     http_fallback: httpFallback || '',
-    bitrate: src.bitrate, duration: src.duration,
+    bitrate: src.bitrate, format: src.format || 'mp3', duration: src.duration,
+    ekey: src.ekey || '', encrypted: isEnc,
     expires: KUWO_TTL,
   };
   if (kv) {
     try { await kv.put(cacheKey, JSON.stringify(out), { expirationTtl: KUWO_TTL }); } catch (_) {}
   }
-  return ok(out, '获取直链成功');
+  return ok(out, isEnc ? '获取直链成功（加密音质，需客户端解密）' : '获取直链成功');
 }
 
 /* ============================ 路由 ============================ */

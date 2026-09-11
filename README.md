@@ -179,18 +179,21 @@ Base URL 为你的 Worker 地址。支持 GET（query）与 POST（JSON 或 form
 
 | 接口 | 参数 | 说明 |
 |------|------|------|
-| `/kuwo/search` | `keyword`，`pn`，`rn` | 返回 `id/name/artist/album/pic/duration/is_pay` |
-| `/kuwo/url` | `mid` | 返回直链 `url`、`bitrate`、`https_ok`、`http_fallback`、`is_preview` |
+| `/kuwo/search` | `keyword`，`pn`，`rn` | 返回 `id/name/artist/album/pic/duration/is_pay/qualities`（解析自 `N_MINFO`） |
+| `/kuwo/url` | `mid`，`br`(可选) | `br` 形如 `320kmp3`/`128kmp3`/`2000kflac`/`20900kmflac`；返回 `url`、`bitrate`、`format`、`ekey`、`encrypted`、`https_ok`、`http_fallback` |
 
 说明：
+- `br` 缺省按 `320kmp3` 处理；音质不可用时自动降级 `320kmp3 → 128kmp3`，并**严格校验**返回的 `bitrate`/`format` 与请求一致（酷我在请求不存在的音质时会悄悄回 48k aac，必须拒绝）。
+- **加密音质**（`mflac`/`mgg` 母带/全景声）能拿到直链与 `ekey`，但文件是加密的，浏览器无法直接播放，需用解锁工具配合 `ekey` 离线解密；`flac`（无损）通常为明文可直接播放。
 - 直链默认已把 `http://` 改写为 `https://`（原链放 `http_fallback`）；若 https 直链在浏览器不可用，用外部工具下载 `http_fallback`。
-- KV 缓存键 `kuwo:url:{mid}`，TTL 3600s（与直链有效期对齐）。
-- **VIP/付费曲**的 mobi 会返回约 11 秒试听片段（`is_preview=true`、`bitrate=1`），请换其他音源或平台，不要误当完整歌曲。
+- KV 缓存键 `kuwo:url:{mid}:{br}`，TTL 3600s（与直链有效期对齐）。
+- **VIP/付费曲**若无对应音质权限，直链获取会失败（返回该音质不可用提示），可降低音质或换其他音源/平台。
 - 直链模式建议：浏览器原生下载 / IDM / Aria2 / `curl -L "<url>"`。
 
 ```bash
 curl -X POST -H "Content-Type: application/json" -d '{"keyword":"周杰伦 晴天"}' "https://你的worker/kuwo/search"
 curl -X POST -H "Content-Type: application/json" -d '{"mid":"228908"}' "https://你的worker/kuwo/url"
+curl -X POST -H "Content-Type: application/json" -d '{"mid":"228908","br":"20900kmflac"}' "https://你的worker/kuwo/url"
 ```
 
 ## 客户端扫码登录（自带 Cookie，无需服务器 Cookie 池）

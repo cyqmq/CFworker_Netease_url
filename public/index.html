@@ -261,18 +261,22 @@
       if (!r.success || !r.data || !r.data.length) { list.innerHTML = ''; show('kw-out', r); document.getElementById('kw-out').style.display = 'block'; msg.style.display = 'none'; return; }
       document.getElementById('kw-out').style.display = 'none';
       window.kwSongs = r.data;
-      list.innerHTML = r.data.map((s, i) => `
+      list.innerHTML = r.data.map((s, i) => {
+        const qs = (s.qualities || []).map(q => `<option value="${q.br}">${q.quality}</option>`).join('');
+        return `
         <div style="padding:12px 0;border-bottom:1px solid var(--border)">
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
             <div style="min-width:0;flex:1">
               <div style="font-weight:600">${kwEsc(s.name)}</div>
               <div style="color:var(--muted);font-size:12px">${kwEsc(s.artist)}${s.album ? ' · ' + kwEsc(s.album) : ''}</div>
             </div>
+            <select id="kwq-${i}" style="font-size:12px;padding:2px 4px;min-width:70px">${qs || '<option value="320kmp3">320k mp3</option>'}</select>
             <div class="kuwo-ops" id="kwops-${i}" style="display:flex;gap:6px;flex-wrap:wrap">
               <button class="sec" style="padding:6px 12px;font-size:12px" onclick="kuwoGetUrl(${i})">获取直链</button>
             </div>
           </div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
     } catch (e) {
       list.innerHTML = ''; show('kw-out', { success: false, message: '酷我请求失败：' + e.message });
       document.getElementById('kw-out').style.display = 'block';
@@ -283,32 +287,39 @@
     const box = document.getElementById('kwops-' + i);
     if (!s) return;
     box.innerHTML = '<span class="hint" style="margin:0">获取中…</span>';
-    const r = await api('/kuwo/url', { mid: s.id });
+    const br = document.getElementById('kwq-' + i)?.value || '320kmp3';
+    const r = await api('/kuwo/url', { mid: s.id, br });
     if (!r.success || !r.data || !r.data.url) {
       box.innerHTML = `<span class="hint" style="margin:0;color:#ff9d9d">${kwEsc(r.message || '获取失败')}</span>`;
       return;
     }
     const d = r.data;
+    const ext = d.format || 'mp3';
+    const file = kwFileName(s.name, s.artist) + '.' + ext;
+    const label = `${d.bitrate}k ${ext}` + (d.source?.startsWith('anti') ? ' (anti.s)' : '');
+    s.kurl = d.url; s.kfmt = d.format || 'mp3'; s.kurl_ekey = d.ekey || '';
     let html = '';
-    if (d.is_preview) {
-      html += `<span class="hint" style="margin:0;color:#ffb074">⚠ 该曲为 VIP/版权受限，以下可能是试听片段（约 11s）。尽量选「播放」先确认，或换其他平台音源。</span>`;
+    if (d.encrypted) {
+      html += `<span class="hint" style="margin:0;color:#ffb074">⚠ 此为加密音质（${ext}），浏览器无法直接播放；可用解锁工具解密后播放</span>`;
     }
-    const file = kwFileName(s.name, s.artist) + '.mp3';
-    if (!d.url) {
-      box.innerHTML = `<span class="hint" style="margin:0;color:#ff9d9d">${kwEsc(r.message || '未获取到直链')}</span>`;
-      return;
-    }
-    s.kurl = d.url;
     if (d.http_fallback) {
-      html += `<span class="hint" style="margin:0;color:#ffb074">http 直链，https 不可用时请用外部工具（下方原链）</span>`;
+      html += `<span class="hint" style="margin:0;color:#ffb074">http 直链（https 不可用）</span>`;
       html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'url')">复制原链</button>`;
     } else {
-      html += `<a class="download-link" href="${kwEsc(d.url)}" download="${file}">下载 ${d.bitrate || 128}k mp3</a>`;
+      html += `<a class="download-link" href="${kwEsc(d.url)}" download="${file}">下载 ${label}</a>`;
       html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'url')">复制直链</button>`;
     }
     html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kuwoPlay(${i})">试听</button>`;
-    html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'curl')">复制 curl 命令</button>`;
+    if (d.encrypted && d.ekey) html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopyEkey(${i})">复制解密密钥</button>`;
+    html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'curl')">复制 curl</button>`;
     box.innerHTML = html;
+  }
+  function kwCopyEkey(i) {
+    const s = window.kwSongs[i];
+    if (!s || !s.kurl_ekey) return alert('未获取到解密密钥');
+    navigator.clipboard.writeText(s.kurl_ekey)
+      .then(() => alert('已复制解密密钥（配合解锁工具使用）'))
+      .catch(() => window.prompt('手动复制解密密钥：', s.kurl_ekey));
   }
   function kuwoPlay(i) {
     const s = window.kwSongs[i];
@@ -321,7 +332,7 @@
     if (!s) return;
     const attempt = (url) => {
       if (!url) { alert('未获取到直链，请先点「获取直链」'); return; }
-      const file = kwFileName(s.name, s.artist) + '.mp3';
+      const file = kwFileName(s.name, s.artist) + '.' + (s.kfmt || 'mp3');
       const text = type === 'curl' ? `curl -L -o "${file}" "${url}"` : url;
       navigator.clipboard.writeText(text)
         .then(() => alert('已复制' + (type === 'curl' ? ' curl 命令' : ' 直链')))
@@ -329,7 +340,7 @@
     };
     if (s.kurl) { attempt(s.kurl); return; }
     api('/kuwo/url', { mid: s.id })
-      .then((r) => { if (r.data && r.data.url) s.kurl = r.data.url; attempt(s.kurl); })
+      .then((r) => { if (r.data && r.data.url) { s.kurl = r.data.url; s.kfmt = r.data.format || 'mp3'; } attempt(s.kurl); })
       .catch(() => alert('获取直链失败'));
   }
 
