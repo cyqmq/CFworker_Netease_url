@@ -294,6 +294,11 @@
       html += `<span class="hint" style="margin:0;color:#ffb074">⚠ 该曲为 VIP/版权受限，以下可能是试听片段（约 11s）。尽量选「播放」先确认，或换其他平台音源。</span>`;
     }
     const file = kwFileName(s.name, s.artist) + '.mp3';
+    if (!d.url) {
+      box.innerHTML = `<span class="hint" style="margin:0;color:#ff9d9d">${kwEsc(r.message || '未获取到直链')}</span>`;
+      return;
+    }
+    s.kurl = d.url;
     if (d.http_fallback) {
       html += `<span class="hint" style="margin:0;color:#ffb074">http 直链，https 不可用时请用外部工具（下方原链）</span>`;
       html += `<button class="sec" style="padding:6px 12px;font-size:12px" onclick="kwCopy(${i},'url')">复制原链</button>`;
@@ -314,17 +319,18 @@
   function kwCopy(i, type) {
     const s = window.kwSongs[i];
     if (!s) return;
-    const toCopy = () => {
-      if (!window.kwUrl) return;
+    const attempt = (url) => {
+      if (!url) { alert('未获取到直链，请先点「获取直链」'); return; }
       const file = kwFileName(s.name, s.artist) + '.mp3';
-      const text = type === 'curl' ? `curl -L -H "Referer: http://www.kuwo.cn/" -o "${file}" "${window.kwUrl}"` : window.kwUrl;
-      navigator.clipboard.writeText(text).then(() => alert('已复制' + (type === 'curl' ? ' curl 命令' : ' 链接'))).catch(() => alert('复制失败，请手动复制'));
+      const text = type === 'curl' ? `curl -L -o "${file}" "${url}"` : url;
+      navigator.clipboard.writeText(text)
+        .then(() => alert('已复制' + (type === 'curl' ? ' curl 命令' : ' 直链')))
+        .catch(() => { window.prompt('手动复制内容：', text); });
     };
-    // 预先取一次直链（供复制内容使用）
-    api('/kuwo/url', { mid: s.id }).then((r) => {
-      if (r.data && r.data.url) { window.kwUrl = r.data.url; }
-      toCopy();
-    });
+    if (s.kurl) { attempt(s.kurl); return; }
+    api('/kuwo/url', { mid: s.id })
+      .then((r) => { if (r.data && r.data.url) s.kurl = r.data.url; attempt(s.kurl); })
+      .catch(() => alert('获取直链失败'));
   }
 
   /* ===== 扫码登录（Cookie 存本机，不占用服务端） ===== */
